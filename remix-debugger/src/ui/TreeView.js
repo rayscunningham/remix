@@ -2,11 +2,14 @@
 var yo = require('yo-yo')
 var style = require('./styles/treeView')
 var remixLib = require('remix-lib')
+var EventManager = remixLib.EventManager
 var ui = remixLib.helpers.ui
+
 
 class TreeView {
 
   constructor (opts) {
+    this.event = new EventManager()
     this.extractData = opts.extractData || this.extractDataDefault
     this.formatSelf = opts.formatSelf || this.formatSelfDefault
     this.view = null
@@ -33,7 +36,7 @@ class TreeView {
   renderObject (item, parent, key, expand, keyPath) {
     var data = this.extractData(item, parent, key)
     var children = (data.children || []).map((child, index) => {
-      return this.renderObject(child.value, data, child.key, expand, keyPath + ',' + child.key)
+      return this.renderObject(child.value, data, child.key, expand, keyPath + '/' + child.key)
     })
     return this.formatData(key, data, children, expand, keyPath)
   }
@@ -47,21 +50,30 @@ class TreeView {
 
   formatData (key, data, children, expand, keyPath) {
     var label = yo`<div style=${this.cssLabel}><div class="fa fa-caret-right" style=${ui.formatCss(style.caret)}></div><span style=${ui.formatCss(style.data)}>${this.formatSelf(key, data)}</span></div>`
-    var renderedChildren = ''
-    if (children.length) {
-      renderedChildren = yo`<ul style=${this.cssUl}>${children}</ul>`
+    if (data.isNode || children.length) {
+      var renderedChildren = yo`<ul style=${this.cssUl}>${children}</ul>`
       renderedChildren.style.display = this.nodeIsExpanded[keyPath] !== undefined ? (this.nodeIsExpanded[keyPath] ? 'block' : 'none') : (expand ? 'block' : 'none')
       label.firstElementChild.className = renderedChildren.style.display === 'none' ? 'fa fa-caret-right' : 'fa fa-caret-down'
-      var self = this
-      label.onclick = function () {
-        this.firstElementChild.className = this.firstElementChild.className === 'fa fa-caret-right' ? 'fa fa-caret-down' : 'fa fa-caret-right'
-        var list = this.parentElement.querySelector('ul')
-        list.style.display = list.style.display === 'none' ? 'block' : 'none'
-        self.nodeIsExpanded[keyPath] = list.style.display === 'block'
+      if (children.length) {
+        var self = this
+        label.onclick = function () {
+          this.firstElementChild.className = this.firstElementChild.className === 'fa fa-caret-right' ? 'fa fa-caret-down' : 'fa fa-caret-right'
+          var list = this.parentElement.querySelector('ul')
+          list.style.display = list.style.display === 'none' ? 'block' : 'none'
+          self.nodeIsExpanded[keyPath] = list.style.display === 'block'
+        }
+      } else {
+        label.onclick = () => {
+          this.event.trigger('nodeClick', [keyPath, renderedChildren])
+        }
       }
     } else {
       label.firstElementChild.style.visibility = 'hidden'
+      label.onclick = () => {
+        this.event.trigger('leafClick', [keyPath, renderedChildren])
+      }
     }
+
     return yo`<li style=${this.cssLi}>${label}${renderedChildren}</li>`
   }
 
@@ -76,14 +88,20 @@ class TreeView {
         return {key: index, value: item}
       })
       ret.self = 'Array'
+      ret.isNode = true
+      ret.isLeaf = false
     } else if (item instanceof Object) {
       ret.children = Object.keys(item).map((key) => {
         return {key: key, value: item[key]}
       })
       ret.self = 'Object'
+      ret.isNode = true
+      ret.isLeaf = false
     } else {
       ret.self = item
       ret.children = []
+      ret.isNode = false
+      ret.isLeaf = true
     }
     return ret
   }
