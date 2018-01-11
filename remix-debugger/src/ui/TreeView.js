@@ -53,30 +53,29 @@ class TreeView {
   }
 
   formatData (key, data, children, expand, keyPath) {
-    var li = yo`<li style=${this.cssLi}></li>`
-    var label = yo`<div style=${this.cssLabel}><div class="fa fa-caret-right" style=${ui.formatCss(style.caret)}></div><span style=${ui.formatCss(style.data)}>${this.formatSelf(key, data, li)}</span></div>`
-    var renderedChildren = null
-    if (data.isNode || children.length) {
-      renderedChildren = yo`<ul style=${this.cssUl}>${children}</ul>`
-      renderedChildren.style.display = this.nodeIsExpanded[keyPath] !== undefined ? (this.nodeIsExpanded[keyPath] ? 'block' : 'none') : (expand ? 'block' : 'none')
-      label.firstElementChild.className = renderedChildren.style.display === 'none' ? 'fa fa-caret-right' : 'fa fa-caret-down'
-      var self = this
+    var self = this
+    var li = yo`<li style=${self.cssLi}></li>`
+    var caret = yo`<div class="fa fa-caret-right" style=${ui.formatCss(style.caret)}></div>`
+    var label = yo`
+      <div style=${self.cssLabel}>
+        ${caret}
+        <span style=${ui.formatCss(style.data)}>${self.formatSelf(key, data, li)}</span>
+      </div>`
+    li.appendChild(label)
+    if (data.children) {
+      var isExpanded = self.nodeIsExpanded[keyPath]
+      var list = yo`<ul style=${self.cssUl}>${children}</ul>`
+      list.style.display = isExpanded !== undefined ? (isExpanded ? 'block' : 'none') : (expand ? 'block' : 'none')
+      caret.className = list.style.display === 'none' ? 'fa fa-caret-right' : 'fa fa-caret-down'
       label.onclick = function () {
-        this.firstElementChild.className = this.firstElementChild.className === 'fa fa-caret-right' ? 'fa fa-caret-down' : 'fa fa-caret-right'
-        var list = this.parentElement.querySelector('ul')
+        caret.className = caret.className === 'fa fa-caret-right' ? 'fa fa-caret-down' : 'fa fa-caret-right'
         list.style.display = list.style.display === 'none' ? 'block' : 'none'
         self.nodeIsExpanded[keyPath] = list.style.display === 'block'
-        self.event.trigger('nodeClick', [keyPath, renderedChildren])
+        self.event.trigger('nodeClick', [keyPath, list])
       }
+      li.appendChild(list)
     } else {
-      label.firstElementChild.style.visibility = 'hidden'
-      label.onclick = () => {
-        this.event.trigger('leafClick', [keyPath, renderedChildren])
-      }
-    }
-    li.appendChild(label)
-    if (renderedChildren) {
-      li.appendChild(renderedChildren)
+      caret.style.visibility = 'hidden'
     }
     return li
   }
