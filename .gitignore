@@ -2,7 +2,6 @@ build
 node_modules
 npm-debug.log
 lint.xml
-.vscode
 test-browser/reports/*
 babelify-src
 docs/_build

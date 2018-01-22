@@ -17,7 +17,7 @@
 			"request": "launch",
 			"name": "Server",
 			"cwd": "${workspaceFolder}",
-			"program": "${workspaceFolder}/src/mockDebug.ts",
+			"program": "${workspaceFolder}/src/solidityDebug.ts",
 			"args": [ "--server=4711" ],
 			"outFiles": [ "${workspaceFolder}/out/**/*.js" ]
 		},
@@ -35,13 +35,6 @@
 			],
 			"outFiles": [ "${workspaceFolder}/out/**/*.js" ],
 			"internalConsoleOptions": "openOnSessionStart"
-		},
-		{
-			"type": "mock",
-			"request": "launch",
-			"name": "Mock Sample",
-			"program": "${workspaceFolder}/${command:AskForProgramName}",
-			"stopOnEntry": true
 		}
 	],
 	"compounds": [

@@ -4,17 +4,21 @@
 
 import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
+import * as ganache from 'ganache-cli';
+import * as Web3 from 'web3';
+//import { EthJSVM, StateManager } from 'ethereumjs-vm';
+//import { Web3VMProvider } from 'remix-lib';
 
-export interface MockBreakpoint {
+export interface SolidityBreakpoint {
 	id: number;
 	line: number;
 	verified: boolean;
 }
 
 /**
- * A Mock runtime with minimal debugger functionality.
+ * A Solidity runtime with minimal debugger functionality.
  */
-export class MockRuntime extends EventEmitter {
+export class SolidityRuntime extends EventEmitter {
 
 	// the initial (and one and only) file we are 'debugging'
 	private _sourceFile: string;
@@ -29,23 +33,67 @@ export class MockRuntime extends EventEmitter {
 	private _currentLine = 0;
 
 	// maps from sourceFile to array of Mock breakpoints
-	private _breakPoints = new Map<string, MockBreakpoint[]>();
+	private _breakPoints = new Map<string, SolidityBreakpoint[]>();
 
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
 	private _breakpointId = 1;
 
+	private _web3;
+
+	//private _web3VM;
+
+	//private _blockGasLimitDefault = 4300000;
+  //private _blockGasLimit;
+
+	//private static mainNetGenesisHash = '0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3';
 
 	constructor() {
 		super();
+		//this.init();
 	}
+/*
+	private init() {
+
+		let stateManager = new StateManager();
+		let vm = new EthJSVM({
+			enableHomestead: true,
+			activatePrecompiles: true
+		})
+		vm.stateManager = stateManager;
+		vm.blockchain = stateManager.blockchain;
+		vm.trie = stateManager.trie;
+		vm.stateManager.checkpoint();
+
+		let web3VM = new Web3VMProvider()
+		web3VM.setVM(vm);
+
+		setInterval(() => {
+			if (this._web3 !== 'undefined') {
+				this._web3.eth.getBlock('latest', (err, block) => {
+					if (!err) {
+						// we can't use the blockGasLimit cause the next blocks could have a lower limit : https://github.com/ethereum/remix/issues/506
+						this._blockGasLimit = (block && block.gasLimit) ? Math.floor(block.gasLimit - (5 * block.gasLimit) / 1024) : this._blockGasLimitDefault
+					} else {
+						this._blockGasLimit = this._blockGasLimitDefault
+					}
+				})
+			}
+		}, 15000)
+
+		this._blockGasLimit
+	}
+	*/
 
 	/**
 	 * Start executing the given program.
 	 */
-	public start(program: string, stopOnEntry: boolean) {
+public start(contract: string, contractAddress: string, stopOnEntry: boolean, args: any[]) {
 
-		this.loadSource(program);
+		this._web3 = new Web3 (ganache.provider());
+		this._web3;
+
+		this.loadSource(contract);
 		this._currentLine = -1;
 
 		this.verifyBreakpoints(this._sourceFile);
@@ -100,12 +148,12 @@ export class MockRuntime extends EventEmitter {
 	/*
 	 * Set breakpoint in file with given line.
 	 */
-	public setBreakPoint(path: string, line: number) : MockBreakpoint {
+	public setBreakPoint(path: string, line: number) : SolidityBreakpoint {
 
-		const bp = <MockBreakpoint> { verified: false, line, id: this._breakpointId++ };
+		const bp = <SolidityBreakpoint> { verified: false, line, id: this._breakpointId++ };
 		let bps = this._breakPoints.get(path);
 		if (!bps) {
-			bps = new Array<MockBreakpoint>();
+			bps = new Array<SolidityBreakpoint>();
 			this._breakPoints.set(path, bps);
 		}
 		bps.push(bp);
@@ -118,7 +166,7 @@ export class MockRuntime extends EventEmitter {
 	/*
 	 * Clear breakpoint in file with given line.
 	 */
-	public clearBreakPoint(path: string, line: number) : MockBreakpoint | undefined {
+	public clearBreakPoint(path: string, line: number) : SolidityBreakpoint | undefined {
 		let bps = this._breakPoints.get(path);
 		if (bps) {
 			const index = bps.findIndex(bp => bp.line === line);

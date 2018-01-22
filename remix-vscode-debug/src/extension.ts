@@ -6,25 +6,27 @@
 
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
+import * as path from 'path';
+
 
 export function activate(context: vscode.ExtensionContext) {
 
-	context.subscriptions.push(vscode.commands.registerCommand('extension.mock-debug.getProgramName', config => {
+	context.subscriptions.push(vscode.commands.registerCommand('extension.solidity-debug.getConstructorArgs', config => {
 		return vscode.window.showInputBox({
-			placeHolder: "Please enter the name of a markdown file in the workspace folder",
-			value: "readme.md"
+			placeHolder: "Please enter the constructor arguments",
 		});
 	}));
 
-	// register a configuration provider for 'mock' debug type
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('mock', new MockConfigurationProvider()));
+	// register a configuration provider for 'solidity' debug type
+	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('solidity', new SolidityConfigurationProvider()));
+
 }
 
 export function deactivate() {
 	// nothing to do
 }
 
-class MockConfigurationProvider implements vscode.DebugConfigurationProvider {
+class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider {
 
 	/**
 	 * Massage a debug configuration just before a debug session is being launched,
@@ -32,22 +34,34 @@ class MockConfigurationProvider implements vscode.DebugConfigurationProvider {
 	 */
 	resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration> {
 
-		// if launch.json is missing or empty
-		if (!config.type && !config.request && !config.name) {
-			const editor = vscode.window.activeTextEditor;
-			if (editor && editor.document.languageId === 'markdown' ) {
-				config.type = 'mock';
-				config.name = 'Launch';
-				config.request = 'launch';
-				config.program = '${file}';
-				config.stopOnEntry = true;
-			}
+		if (vscode.workspace.rootPath === undefined) {
+			vscode.window.showWarningMessage('Please open a folder in Visual Studio Code as a workspace');
+			return;
 		}
 
-		if (!config.program) {
-			return vscode.window.showInformationMessage("Cannot find a program to debug").then(_ => {
-				return undefined;	// abort launch
-			});
+		const activeTextEditor = vscode.window.activeTextEditor;
+
+		if (!activeTextEditor) {
+			vscode.window.showWarningMessage('Please select a solidity file for debugging.');
+			return;
+		}
+
+		if (path.extname(activeTextEditor.document.fileName) !== '.sol') {
+			vscode.window.showWarningMessage('Selected file is not a solidity file (*.sol)');
+			return;
+		}
+
+		config.contract = activeTextEditor.document.fileName;
+
+		// if launch.json is missing or empty
+		if (!config.type && !config.request && !config.name) {
+
+			if (activeTextEditor && activeTextEditor.document.languageId === 'solidity' ) {
+				config.type = 'solidity';
+				config.name = 'Launch';
+				config.request = 'launch';
+				config.stopOnEntry = true;
+			}
 		}
 
 		return config;

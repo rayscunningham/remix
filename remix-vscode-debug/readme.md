@@ -1,8 +1,8 @@
-# VS Code Mock Debug
+# VS Code Solidity Debug
 
 This is a starter sample for developing VS Code debug adapters.
 
-**Mock Debug** simulates a debug adapter for Visual Studio Code.
+**Solidity Debug** simulates a debug adapter for Visual Studio Code.
 It supports *step*, *continue*, *breakpoints*, *exceptions*, and
 *variable access* but it is not connected to any real debugger.
 
@@ -14,7 +14,7 @@ More information about how to develop a new debug adapter can be found
 Or discuss debug adapters on Gitter:
 [![Gitter Chat](https://img.shields.io/badge/chat-online-brightgreen.svg)](https://gitter.im/Microsoft/vscode)
 
-## Using Mock Debug
+## Using Solidity Debug
 
 * Install the **Mock Debug** extension in VS Code.
 * Create a new 'program' file `readme.md` and enter several lines of arbitrary text.
@@ -39,3 +39,8 @@ You can now 'step through' the `readme.md` file, set and hit breakpoints, and ru
   * Switch to the debug viewlet and press the gear dropdown.
   * Select the debug environment "Mock Debug".
   * Press `F5` to start debugging.
+
+## Features Task List
+
+- [ ] Launch Local JavaScript VM
+- [ ] Attach to a RPC endpoint
