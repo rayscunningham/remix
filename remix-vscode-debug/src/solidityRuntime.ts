@@ -4,10 +4,17 @@
 
 import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
-import * as ganache from 'ganache-cli';
+
+import * as path from 'path';
+
+import { EventManager, global } from 'remix-lib';
+import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
-//import { EthJSVM, StateManager } from 'ethereumjs-vm';
-//import { Web3VMProvider } from 'remix-lib';
+
+//import * as EthJSVM from 'ethereumjs-vm';
+
+
+//var Web3Providers = remixLib.vm.Web3Providers
 
 export interface SolidityBreakpoint {
 	id: number;
@@ -26,6 +33,13 @@ export class SolidityRuntime extends EventEmitter {
 		return this._sourceFile;
 	}
 
+	private _eventManager: EventManager;
+	public get eventManager() {
+		return this._eventManager;
+	}
+
+	//private _web3Providers: vm.Web3Providers;
+
 	// the contents (= lines) of the one and only file
 	private _sourceLines: string[];
 
@@ -39,59 +53,218 @@ export class SolidityRuntime extends EventEmitter {
 	// so that the frontend can match events with breakpoints.
 	private _breakpointId = 1;
 
-	private _web3;
+	private _compilerOutput: any;
+	private _contractAbi = {};
+	private _contractByteCode: any;
 
-	//private _web3VM;
-
-	//private _blockGasLimitDefault = 4300000;
-  //private _blockGasLimit;
-
-	//private static mainNetGenesisHash = '0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3';
+	private _transaction: any;
+	public get transaction() {
+		return this._transaction;
+	}
 
 	constructor() {
 		super();
-		//this.init();
-	}
-/*
-	private init() {
 
-		let stateManager = new StateManager();
-		let vm = new EthJSVM({
+		//this._web3Providers = new vm.Web3Providers();
+		this._eventManager = new EventManager();
+	}
+
+	private async deploy(constructorArgs: any[]) {
+
+		try {
+			const accounts = await this.getAccounts();
+			const byteCode = this._contractByteCode.object;
+			const gasEstimate = await this.estimateGas(byteCode);
+
+			const contract = await this.deployContract(accounts[0], constructorArgs, gasEstimate);
+
+			console.log("Contract Address: " + contract.address);
+			this._transaction = await this.getTransaction(contract.transactionHash);
+
+			const debugTrace = await this.getTrace(contract.transactionHash);
+
+			console.log("Debug Trace: " + debugTrace.result.gas);
+/*
+			const contract = global.web3.eth.contract(this._contractAbi);
+			contract.new(constructorArgs, {
+				data: '0x' + byteCode,
+				from: accounts[0],
+				gas: gasEstimate+40000
+				}, (error, result) => {
+					if(!error) {
+						// NOTE: The callback will fire twice!
+						// Once the contract has the transactionHash property set and once its deployed on an address.
+
+						// e.g. check tx hash on the first call (transaction send)
+						if(!result.address) {
+								console.log(result.transactionHash) // The hash of the transaction, which deploys the contract
+								this.getTransaction(result.transactionHash).then((tx) => {
+
+									console.log("Transaction Block Number: " + tx['blockNumber']);
+									console.log("Transaction Gas: " + tx['gas']);
+									console.log("Transaction Gas Price: " + tx['gasPrice']);
+								}
+
+								);
+						// check address on the second call (contract deployed)
+						} else {
+								console.log("Contract Address: " + result.address) // the contract address
+						}
+
+						// Note that the returned "myContractReturned" === "myContract",
+						// so the returned "myContractReturned" object will also get the address set.
+				 } else {
+					 console.log(error)
+				 }
+			})
+*/
+
+
+			console.log("Transaction Block Number: " + this._transaction.blockNumber);
+			console.log("Transaction Gas: " + this._transaction.gas);
+			console.log("Transaction Gas Price: " + this._transaction.gasPrice);
+
+			//this._eventManager.trigger('newTraceRequested', [tx['blockNumber'], tx['hash'], tx])
+		} catch(error) {
+			console.log(error);
+		}
+	}
+
+	private estimateGas(byteCode: string) {
+		return new Promise<number>( (resolve, reject) => {
+				global.web3.eth.estimateGas( {data: byteCode}, (error, result) => {
+					if(error !== null)
+						reject(error);
+					else
+						resolve(result);
+				});
+		});
+	}
+
+	private getAccounts() {
+		return new Promise( (resolve, reject) => {
+			global.web3.eth.getAccounts( (error, result) => {
+				if(error !== null)
+					reject(error);
+				else
+					resolve(result);
+			});
+		});
+	}
+
+	private deployContract(account: string, constructorArgs: any[], gasEstimate: number) {
+		return new Promise<any>( (resolve, reject) => {
+			const contract = global.web3.eth.contract(this._contractAbi);
+			contract.new(constructorArgs, {
+				data: '0x' + this._contractByteCode.object,
+				from: account,
+				gas: gasEstimate + 40000
+			}, (error, result) => {
+				if(error !== null)
+						reject(error);
+				else {
+					// NOTE: The callback will fire twice!
+					// Once the contract has the transactionHash property set and once its deployed on an address.
+
+					// e.g. check tx hash on the first call (transaction send)
+					if (!result.address) {
+							//resolve(result);
+							console.log("Transaction Hash: " + result.transactionHash);
+					} else {
+						// check address on the second call (contract deployed)
+						resolve(result)
+						console.log("Address: " + result.address);
+							//resolve((result) => { if (result.address) return result });
+					}
+				}
+			})
+		});
+	}
+
+	private getTransaction(transactionHash: string) {
+		return new Promise<any>( (resolve, reject) => {
+			global.web3.eth.getTransaction(transactionHash, (error, result) => {
+				if(error !== null)
+					reject(error);
+				else
+					resolve(result);
+			});
+		});
+	}
+
+	private getTrace(transactionHash: string) {
+		return new Promise<any>( (resolve, reject) => {
+			global.web3.currentProvider.sendAsync({
+			method: "debug_traceTransaction",
+			params: [transactionHash,
+				{ disableStorage: true,
+					disableMemory: false,
+					disableStack: false,
+					fullStorage: false
+				}],
+			jsonrpc: "2.0",
+			id: "2"
+			}, (error, result) => {
+
+				if (error !== null)
+					reject(error)
+				else
+					resolve(result)
+
+			});
+		})
+	}
+
+	public start(contractFilePath: string, compilerOutput: any, constructorArgs: any[], stopOnEntry: boolean) {
+
+		this._compilerOutput = compilerOutput;
+
+		const contractName = path.basename(contractFilePath, '.sol');
+
+		this._contractAbi = compilerOutput.contracts[contractName + '.sol'][contractName].abi;
+		this._contractByteCode = this._compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
+
+		//var stateManager = new StateManagerCommonStorageDump({})
+/*
+		var vm = new EthJSVM({
 			enableHomestead: true,
 			activatePrecompiles: true
 		})
-		vm.stateManager = stateManager;
-		vm.blockchain = stateManager.blockchain;
-		vm.trie = stateManager.trie;
-		vm.stateManager.checkpoint();
 
-		let web3VM = new Web3VMProvider()
-		web3VM.setVM(vm);
 
-		setInterval(() => {
-			if (this._web3 !== 'undefined') {
-				this._web3.eth.getBlock('latest', (err, block) => {
-					if (!err) {
-						// we can't use the blockGasLimit cause the next blocks could have a lower limit : https://github.com/ethereum/remix/issues/506
-						this._blockGasLimit = (block && block.gasLimit) ? Math.floor(block.gasLimit - (5 * block.gasLimit) / 1024) : this._blockGasLimitDefault
-					} else {
-						this._blockGasLimit = this._blockGasLimitDefault
-					}
-				})
-			}
-		}, 15000)
+    this._web3Providers.addProvider('vm', vm);
+    */
 
-		this._blockGasLimit
+		global.web3 = new Web3(ganache.provider({
+			"accounts": [
+				{ "balance": "100000000000000000000" }
+			],
+			"locked": false
+		}));
+
+		this.deploy(constructorArgs);
+
+
+		this.loadSource(contractFilePath);
+		this._currentLine = -1;
+
+		this.verifyBreakpoints(this._sourceFile);
+
+		if (stopOnEntry) {
+			// we step once
+			this.step(false, 'stopOnEntry');
+		} else {
+			// we just start to run until we hit a breakpoint or an exception
+			this.continue();
+		}
 	}
-	*/
 
 	/**
 	 * Start executing the given program.
 	 */
-public start(contract: string, contractAddress: string, stopOnEntry: boolean, args: any[]) {
 
-		this._web3 = new Web3 (ganache.provider());
-		this._web3;
+	 /*
+	public start(contract: string, contractAddress: string, stopOnEntry: boolean, args: any[]) {
 
 		this.loadSource(contract);
 		this._currentLine = -1;
@@ -106,6 +279,7 @@ public start(contract: string, contractAddress: string, stopOnEntry: boolean, ar
 			this.continue();
 		}
 	}
+	*/
 
 	/**
 	 * Continue execution to the end/beginning.

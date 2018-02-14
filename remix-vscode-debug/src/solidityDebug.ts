@@ -12,6 +12,16 @@ import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
 import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
 
+import { EventManager, SourceLocationTracker, global } from 'remix-lib';
+import { trace, code } from 'remix-core';
+import { SolidityProxy, InternalCallTree } from 'remix-solidity';
+
+import * as path from 'path';
+import * as solc from 'solc';
+import * as fs from 'fs';
+
+//import * as ganache from 'ganache-core';
+//import * as Web3 from 'web3';
 
 /**
  * This interface describes the mock-debug specific launch attributes
@@ -20,8 +30,15 @@ import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
  * The interface should always match this schema.
  */
 interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
-	/** An absolute path to the "program" to debug. */
-	contract: string;
+	/** An absolute path to the "contract" to debug. */
+  compilerOutput: any;
+
+	contractFilePath: string;
+
+	constructorParamsDef?: string;
+
+	constructorArgs?: string;
+
 	/** Automatically stop target after launch. If not specified, target does not stop. */
 	stopOnEntry?: boolean;
 	/** enable logging the Debug Adapter Protocol */
@@ -37,6 +54,22 @@ class SolidityDebugSession extends LoggingDebugSession {
 	private _runtime: SolidityRuntime;
 
 	private _variableHandles = new Handles<string>();
+
+	private _eventManager: EventManager;
+
+	private _traceManager: trace.TraceManager;
+
+	private _codeManager: code.CodeManager;
+
+	private _solidityProxy: SolidityProxy;
+
+	private _internalCallTree: InternalCallTree;
+
+	private _sourceLocationTracker: SourceLocationTracker;
+
+
+
+	private _currentStepIndex: number;
 
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
@@ -77,6 +110,60 @@ class SolidityDebugSession extends LoggingDebugSession {
 		this._runtime.on('end', () => {
 			this.sendEvent(new TerminatedEvent());
 		});
+
+		this._eventManager = new EventManager();
+
+		this._currentStepIndex = -1
+
+		this._traceManager = new trace.TraceManager();
+		this._codeManager = new code.CodeManager(this._traceManager);
+		this._solidityProxy = new SolidityProxy(this._traceManager, this._codeManager)
+
+		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
+
+
+		const self = this;
+
+		this._eventManager.register('indexChanged', this, (index) => {
+			this._codeManager.resolveStep(index, this._runtime.transaction)
+		})
+
+		this._codeManager.event.register('changed', this, (code, address, instIndex) => {
+			this._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
+				if (!error) {
+					self._eventManager.trigger('sourceLocationChanged', [sourceLocation])
+				}
+			})
+		})
+		/*
+
+
+		this._runtime.eventManager.register('newTraceRequested', this, (blockNumber, txHash, tx) => {
+			//self.startDebugging(blockNumber, txIndex, tx)
+
+			//self.startDebugging(txHash);
+
+
+		})
+		*/
+
+	}
+
+	private startDebugging(transactionHash: string) {
+		global.web3.currentProvider.sendAsync({
+			method: "debug_traceTransaction",
+			params: [transactionHash,
+				{ disableStorage: true,
+					disableMemory: false,
+					disableStack: false,
+					fullStorage: false
+				}],
+			jsonrpc: "2.0",
+			id: "2"
+	}, (err, result) => {
+		console.log("Debug Transaction: " + result)
+
+	});
 	}
 
 	/**
@@ -107,11 +194,33 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 	protected launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments): void {
 
+		//const contractCode = fs.readFileSync(args.contractFilePath, 'utf8');
+
+		//const compiledContract = solc.compile(contractCode, 1);
+
+		//const contractName = path.basename(args.contract, '.sol');
+
+		//const abi = JSON.parse(compiledContract.contracts[':' +contractName].interface);
+		//const byteCode = compiledContract.contracts[':' +contractName].bytecode;
+
+		let constructorArgs: string[] = [];
+		if (args.constructorArgs !== undefined) {
+			constructorArgs = args.constructorArgs.split(',');
+		}
+
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
 
 		// start the program in the runtime
-		this._runtime.start(args.contract, '',!!args.stopOnEntry, []);
+		this._runtime.start(args.contractFilePath, args.compilerOutput, constructorArgs, !!args.stopOnEntry);
+
+		// startDebugging
+
+		//if (compilationResult && compilationResult.sources && compilationResult.contracts) {
+		this._solidityProxy.reset(args.compilerOutput);
+		//} else {
+		//	this.solidityProxy.reset({})
+		//}
 
 		this.sendResponse(response);
 	}
@@ -169,12 +278,16 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		const frameReference = args.frameId;
 		const scopes = new Array<Scope>();
-		scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
-		scopes.push(new Scope("Global", this._variableHandles.create("global_" + frameReference), true));
+		//scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
+		//scopes.push(new Scope("Global", this._variableHandles.create("global_" + frameReference), true));
+
+
+		scopes.push(new Scope("Transaction", this._variableHandles.create("tx_" + frameReference), true));
 
 		response.body = {
 			scopes: scopes
 		};
+
 		this.sendResponse(response);
 	}
 
@@ -182,31 +295,113 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		const variables = new Array<DebugProtocol.Variable>();
 		const id = this._variableHandles.get(args.variablesReference);
+
 		if (id !== null) {
-			variables.push({
-				name: id + "_i",
-				type: "integer",
-				value: "123",
-				variablesReference: 0
-			});
-			variables.push({
-				name: id + "_f",
-				type: "float",
-				value: "3.14",
-				variablesReference: 0
-			});
-			variables.push({
-				name: id + "_s",
-				type: "string",
-				value: "hello world",
-				variablesReference: 0
-			});
-			variables.push({
-				name: id + "_o",
-				type: "object",
-				value: "Object",
-				variablesReference: this._variableHandles.create("object_")
-			});
+
+			if (id.startsWith("tx_")) {
+				variables.push({
+					name: "tx",
+					type: "object",
+					value: this._runtime.transaction,
+					variablesReference: 0
+				});
+				/*
+				variables.push({
+					name: "hash",
+					type: "string",
+					value: this._runtime.transaction.hash,
+					variablesReference: 0
+				});
+
+				variables.push({
+					name: "nonce",
+					type: "string",
+					value: this._runtime.transaction.nonce,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "blockHash",
+					type: "string",
+					value: this._runtime.transaction.blockHash,
+					variablesReference: 0
+				});
+
+				variables.push({
+					name: "blockNumber",
+					type: "integer",
+					value: this._runtime.transaction.blockNumber,
+					variablesReference: 0
+				});
+
+				variables.push({
+					name: "transactionIndex",
+					type: "integer",
+					value: this._runtime.transaction.transactionIndex,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "from",
+					type: "string",
+					value: this._runtime.transaction.from,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "to",
+					type: "string",
+					value: this._runtime.transaction.to,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "value",
+					type: "string",
+					value: this._runtime.transaction.value,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "gasPrice",
+					type: "object",
+					value: this._runtime.transaction.gasPrice,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "gas",
+					type: "number",
+					value: this._runtime.transaction.gas,
+					variablesReference: 0
+				});
+				variables.push({
+					name: "input",
+					type: "string",
+					value: this._runtime.transaction.input,
+					variablesReference: 0
+				});
+				*/
+			} else {
+				variables.push({
+					name: id + "_i",
+					type: "integer",
+					value: "123",
+					variablesReference: 0
+				});
+				variables.push({
+					name: id + "_f",
+					type: "float",
+					value: "3.14",
+					variablesReference: 0
+				});
+				variables.push({
+					name: id + "_s",
+					type: "string",
+					value: "hello world",
+					variablesReference: 0
+				});
+				variables.push({
+					name: id + "_o",
+					type: "object",
+					value: "Object",
+					variablesReference: this._variableHandles.create("object_")
+				});
+			}
 		}
 
 		response.body = {
