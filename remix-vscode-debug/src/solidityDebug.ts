@@ -16,6 +16,9 @@ import { EventManager, SourceLocationTracker, global } from 'remix-lib';
 import { trace, code } from 'remix-core';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
 
+import * as ethJSABI from 'ethereumjs-abi';
+import * as  ethJSUtil from 'ethereumjs-util';
+
 import * as path from 'path';
 import * as solc from 'solc';
 import * as fs from 'fs';
@@ -31,7 +34,11 @@ import * as fs from 'fs';
  */
 interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	/** An absolute path to the "contract" to debug. */
-  compilerOutput: any;
+	compilerOutput: any;
+
+	contractByteCode: any;
+
+	contractAbi: any[];
 
 	contractFilePath: string;
 
@@ -160,11 +167,37 @@ class SolidityDebugSession extends LoggingDebugSession {
 				}],
 			jsonrpc: "2.0",
 			id: "2"
-	}, (err, result) => {
-		console.log("Debug Transaction: " + result)
+		}, (err, result) => {
+			console.log("Debug Transaction: " + result)
 
-	});
+		});
 	}
+
+	private decodeInputParams(data: any, abi: any) {
+		data = ethJSUtil.toBuffer('0x' + data)
+
+		let constructorInputs: any;
+
+		for (var i = 0; i < abi.length; i++) {
+      if (abi[i].type === 'constructor') {
+				constructorInputs = abi[i].inputs;
+				break;
+			}
+		}
+
+		let inputTypes: any[] = [];
+		for (var i = 0; i < constructorInputs.length; i++) {
+			inputTypes.push(constructorInputs[i].type)
+		}
+		let decoded = ethJSABI.rawDecode(inputTypes, data)
+		decoded = ethJSABI.stringify(inputTypes, decoded)
+		let ret: any = {}
+		for (var k in constructorInputs) {
+			ret[constructorInputs[k].type + ' ' + constructorInputs[k].name] = decoded[k]
+		}
+		return ret;
+
+  }
 
 	/**
 	 * The 'initialize' request is the first request called by the frontend
@@ -203,9 +236,23 @@ class SolidityDebugSession extends LoggingDebugSession {
 		//const abi = JSON.parse(compiledContract.contracts[':' +contractName].interface);
 		//const byteCode = compiledContract.contracts[':' +contractName].bytecode;
 
-		let constructorArgs: string[] = [];
+		let constructorArgs: any[] = [];
 		if (args.constructorArgs !== undefined) {
 			constructorArgs = args.constructorArgs.split(',');
+
+			const abi = args.contractAbi;
+			for (var i = 0; i < abi.length; i++) {
+				if (abi[i].type === 'constructor') {
+					const constructorInputs = abi[i].inputs ;
+					for (var i = 0; i < constructorInputs.length; i++) {
+						//inputTypes.push(constructorInputs[i].type)
+						constructorArgs[i] = Number(constructorArgs[i]);
+					}
+
+					break;
+				}
+			}
+
 		}
 
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
@@ -278,7 +325,7 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		const frameReference = args.frameId;
 		const scopes = new Array<Scope>();
-		//scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
+		scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
 		//scopes.push(new Scope("Global", this._variableHandles.create("global_" + frameReference), true));
 
 
@@ -295,87 +342,79 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		const variables = new Array<DebugProtocol.Variable>();
 		const id = this._variableHandles.get(args.variablesReference);
-
 		if (id !== null) {
 
 			if (id.startsWith("tx_")) {
-				variables.push({
-					name: "tx",
-					type: "object",
-					value: this._runtime.transaction,
-					variablesReference: 0
-				});
-				/*
-				variables.push({
-					name: "hash",
-					type: "string",
-					value: this._runtime.transaction.hash,
-					variablesReference: 0
-				});
 
-				variables.push({
-					name: "nonce",
-					type: "string",
-					value: this._runtime.transaction.nonce,
-					variablesReference: 0
-				});
+				const inputData = this._runtime.transaction.input.replace('0x', '')
+				const bytecode = this._runtime.contractByteCode.object;
+				const inputParams = this.decodeInputParams(inputData.substring(bytecode.length), this._runtime.contractAbi)
+
 				variables.push({
 					name: "blockHash",
 					type: "string",
-					value: this._runtime.transaction.blockHash,
+					value: String(this._runtime.transactionReceipt.blockHash),
 					variablesReference: 0
 				});
-
 				variables.push({
 					name: "blockNumber",
 					type: "integer",
-					value: this._runtime.transaction.blockNumber,
+					value: String(this._runtime.transactionReceipt.blockNumber),
 					variablesReference: 0
 				});
-
+				variables.push({
+					name: "transactionHash",
+					type: "string",
+					value: String(this._runtime.transactionReceipt.transactionHash),
+					variablesReference: 0
+				});
+				variables
 				variables.push({
 					name: "transactionIndex",
 					type: "integer",
-					value: this._runtime.transaction.transactionIndex,
+					value: String(this._runtime.transactionReceipt.transactionIndex),
 					variablesReference: 0
 				});
 				variables.push({
 					name: "from",
 					type: "string",
-					value: this._runtime.transaction.from,
+					value: String(this._runtime.transactionReceipt.from),
 					variablesReference: 0
 				});
 				variables.push({
 					name: "to",
 					type: "string",
-					value: this._runtime.transaction.to,
+					value: this._runtime.transactionReceipt.to,
 					variablesReference: 0
 				});
 				variables.push({
-					name: "value",
-					type: "string",
-					value: this._runtime.transaction.value,
+					name: "cumulativeGasUsed",
+					type: "integer",
+					value: String(this._runtime.transactionReceipt.cumulativeGasUsed),
 					variablesReference: 0
 				});
 				variables.push({
-					name: "gasPrice",
-					type: "object",
-					value: this._runtime.transaction.gasPrice,
+					name: "gasUsed",
+					type: "integer",
+					value: String(this._runtime.transactionReceipt.gasUsed),
 					variablesReference: 0
 				});
-				variables.push({
-					name: "gas",
-					type: "number",
-					value: this._runtime.transaction.gas,
-					variablesReference: 0
-				});
+
 				variables.push({
 					name: "input",
 					type: "string",
-					value: this._runtime.transaction.input,
+					value: String(this._runtime.transaction.input),
 					variablesReference: 0
 				});
-				*/
+
+				variables.push({
+					name: "logs",
+					type: "object",
+					value: String(this._runtime.transactionReceipt.logs),
+					variablesReference: this._variableHandles.create("logs_")
+				});
+
+
 			} else {
 				variables.push({
 					name: id + "_i",

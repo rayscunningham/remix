@@ -45,7 +45,8 @@
 		"solc": "^0.4.18",
 		"web3": "^0.18.0",
 		"vscode-debugadapter": "1.25.0",
-		"vscode-debugprotocol": "1.25.0"
+		"vscode-debugprotocol": "1.25.0",
+		"bignumber.js": "git+https://github.com/frozeman/bignumber.js-nolookahead.git"
 	},
 	"devDependencies": {
 		"@types/node": "7.0.43",

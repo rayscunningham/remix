@@ -10,12 +10,6 @@ import * as path from 'path';
 import { EventManager, global } from 'remix-lib';
 import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
-
-//import * as EthJSVM from 'ethereumjs-vm';
-
-
-//var Web3Providers = remixLib.vm.Web3Providers
-
 export interface SolidityBreakpoint {
 	id: number;
 	line: number;
@@ -54,12 +48,24 @@ export class SolidityRuntime extends EventEmitter {
 	private _breakpointId = 1;
 
 	private _compilerOutput: any;
-	private _contractAbi = {};
+	private _contractAbi: any;
+	public get contractAbi() {
+		return this._contractAbi;
+	}
+
 	private _contractByteCode: any;
+	public get contractByteCode() {
+		return this._contractByteCode;
+	}
 
 	private _transaction: any;
 	public get transaction() {
 		return this._transaction;
+	}
+
+	private _transactionReceipt: any;
+	public get transactionReceipt() {
+		return this._transactionReceipt;
 	}
 
 	constructor() {
@@ -79,7 +85,9 @@ export class SolidityRuntime extends EventEmitter {
 			const contract = await this.deployContract(accounts[0], constructorArgs, gasEstimate);
 
 			console.log("Contract Address: " + contract.address);
+
 			this._transaction = await this.getTransaction(contract.transactionHash);
+			this._transactionReceipt = await this.getTransactionReceipt(contract.transactionHash);
 
 			const debugTrace = await this.getTrace(contract.transactionHash);
 
@@ -154,7 +162,8 @@ export class SolidityRuntime extends EventEmitter {
 
 	private deployContract(account: string, constructorArgs: any[], gasEstimate: number) {
 		return new Promise<any>( (resolve, reject) => {
-			const contract = global.web3.eth.contract(this._contractAbi);
+      const contract = global.web3.eth.contract(this._contractAbi);
+
 			contract.new(constructorArgs, {
 				data: '0x' + this._contractByteCode.object,
 				from: account,
@@ -192,6 +201,17 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
+	private getTransactionReceipt(transactionHash: string) {
+		return new Promise<any>( (resolve, reject) => {
+			global.web3.eth.getTransactionReceipt(transactionHash, (error, result) => {
+				if(error !== null)
+					reject(error);
+				else
+					resolve(result);
+			});
+		});
+	}
+
 	private getTrace(transactionHash: string) {
 		return new Promise<any>( (resolve, reject) => {
 			global.web3.currentProvider.sendAsync({
@@ -221,19 +241,8 @@ export class SolidityRuntime extends EventEmitter {
 
 		const contractName = path.basename(contractFilePath, '.sol');
 
-		this._contractAbi = compilerOutput.contracts[contractName + '.sol'][contractName].abi;
+		this._contractAbi = this._compilerOutput.contracts[contractName + '.sol'][contractName].abi;
 		this._contractByteCode = this._compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
-
-		//var stateManager = new StateManagerCommonStorageDump({})
-/*
-		var vm = new EthJSVM({
-			enableHomestead: true,
-			activatePrecompiles: true
-		})
-
-
-    this._web3Providers.addProvider('vm', vm);
-    */
 
 		global.web3 = new Web3(ganache.provider({
 			"accounts": [

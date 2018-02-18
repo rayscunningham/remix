@@ -64,11 +64,10 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 
 	  config.compilerOutput = compilerOutput;
 
-		//config.byteCode = compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
+		config.contractByteCode = compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
 
 		const contractAbi = compilerOutput.contracts[contractName + '.sol'][contractName].abi;
-
-		//config.abi = contractAbi;
+		config.contractAbi = contractAbi;
 
 		for (var i = 0; i < contractAbi.length; i++) {
       if (contractAbi[i].type === 'constructor') {
