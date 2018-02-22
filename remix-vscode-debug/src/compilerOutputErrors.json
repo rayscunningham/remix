@@ -1,0 +1,17 @@
+{
+	"contracts": {},
+	"errors": [
+		{
+			"component": "general",
+			"formattedMessage": "Ballot.sol:15:13: ParserError: Expected elementary type name for mapping key type
+			mapping(adress => Voter) voters;
+							^
+	",
+			"message": "Expected elementary type name for mapping key type",
+			"severity": "error",
+			"type": "ParserError"
+
+		}
+	],
+	"sources": {}
+}

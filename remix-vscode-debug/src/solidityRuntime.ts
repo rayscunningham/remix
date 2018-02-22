@@ -7,13 +7,70 @@ import { EventEmitter } from 'events';
 
 import * as path from 'path';
 
-import { EventManager, global } from 'remix-lib';
 import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
+
+import { EventManager, SourceLocationTracker, global, init } from 'remix-lib';
+import { trace, code } from 'remix-core';
+import { SolidityProxy, InternalCallTree } from 'remix-solidity';
+
+import * as EthJSVM from 'ethereumjs-vm';
+import * as StateManager from 'ethereumjs-vm/lib/stateManager';
+
+import * as ethUtil from 'ethereumjs-util';
+
+import { vm } from 'remix-lib';
+
+//var StateManager = require('ethereumjs-vm/lib/stateManager')
+
 export interface SolidityBreakpoint {
 	id: number;
 	line: number;
 	verified: boolean;
+}
+
+class StateManagerCommonStorageDump extends StateManager {
+
+	private keyHashes: any;
+
+  constructor (arg) {
+    super(arg)
+    this.keyHashes = {}
+	}
+
+	get blockchain() {
+		return super.blockchain;
+	}
+
+	get trie() {
+		return super.trie;
+	}
+
+  putContractStorage (address, key, value, cb) {
+    this.keyHashes[ethUtil.sha3(key).toString('hex')] = ethUtil.bufferToHex(key)
+    super.putContractStorage(address, key, value, cb)
+  }
+
+  dumpStorage (address, cb) {
+    var self = this
+    super._getStorageTrie(address, function (err, trie) {
+      if (err) {
+        return cb(err)
+      }
+      var storage = {}
+      var stream = trie.createReadStream()
+      stream.on('data', function (val) {
+        var value = ethUtil.rlp.decode(val.value)
+        storage['0x' + val.key.toString('hex')] = {
+          key: self.keyHashes[val.key.toString('hex')],
+          value: '0x' + value.toString('hex')
+        }
+      })
+      stream.on('end', function () {
+        cb(storage)
+      })
+    })
+	}
 }
 
 /**
@@ -27,7 +84,7 @@ export class SolidityRuntime extends EventEmitter {
 		return this._sourceFile;
 	}
 
-	private _eventManager: EventManager;
+	private _eventManager: EventManager = new EventManager();
 	public get eventManager() {
 		return this._eventManager;
 	}
@@ -46,6 +103,8 @@ export class SolidityRuntime extends EventEmitter {
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
 	private _breakpointId = 1;
+
+	private _currentStepIndex = -1;
 
 	private _compilerOutput: any;
 	private _contractAbi: any;
@@ -70,9 +129,6 @@ export class SolidityRuntime extends EventEmitter {
 
 	constructor() {
 		super();
-
-		//this._web3Providers = new vm.Web3Providers();
-		this._eventManager = new EventManager();
 	}
 
 	private async deploy(constructorArgs: any[]) {
@@ -92,47 +148,12 @@ export class SolidityRuntime extends EventEmitter {
 			const debugTrace = await this.getTrace(contract.transactionHash);
 
 			console.log("Debug Trace: " + debugTrace.result.gas);
-/*
-			const contract = global.web3.eth.contract(this._contractAbi);
-			contract.new(constructorArgs, {
-				data: '0x' + byteCode,
-				from: accounts[0],
-				gas: gasEstimate+40000
-				}, (error, result) => {
-					if(!error) {
-						// NOTE: The callback will fire twice!
-						// Once the contract has the transactionHash property set and once its deployed on an address.
-
-						// e.g. check tx hash on the first call (transaction send)
-						if(!result.address) {
-								console.log(result.transactionHash) // The hash of the transaction, which deploys the contract
-								this.getTransaction(result.transactionHash).then((tx) => {
-
-									console.log("Transaction Block Number: " + tx['blockNumber']);
-									console.log("Transaction Gas: " + tx['gas']);
-									console.log("Transaction Gas Price: " + tx['gasPrice']);
-								}
-
-								);
-						// check address on the second call (contract deployed)
-						} else {
-								console.log("Contract Address: " + result.address) // the contract address
-						}
-
-						// Note that the returned "myContractReturned" === "myContract",
-						// so the returned "myContractReturned" object will also get the address set.
-				 } else {
-					 console.log(error)
-				 }
-			})
-*/
-
 
 			console.log("Transaction Block Number: " + this._transaction.blockNumber);
 			console.log("Transaction Gas: " + this._transaction.gas);
 			console.log("Transaction Gas Price: " + this._transaction.gasPrice);
 
-			//this._eventManager.trigger('newTraceRequested', [tx['blockNumber'], tx['hash'], tx])
+			this._eventManager.trigger('newTraceRequested', [this._transaction.blockNumber, this._transaction.hash, this._transaction])
 		} catch(error) {
 			console.log(error);
 		}
@@ -235,6 +256,9 @@ export class SolidityRuntime extends EventEmitter {
 		})
 	}
 
+	/**
+	 * Start executing the given program.
+	 */
 	public start(contractFilePath: string, compilerOutput: any, constructorArgs: any[], stopOnEntry: boolean) {
 
 		this._compilerOutput = compilerOutput;
@@ -243,6 +267,21 @@ export class SolidityRuntime extends EventEmitter {
 
 		this._contractAbi = this._compilerOutput.contracts[contractName + '.sol'][contractName].abi;
 		this._contractByteCode = this._compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
+/*
+		var stateManager = new StateManagerCommonStorageDump({})
+		var vm = new EthJSVM({
+			enableHomestead: true,
+			activatePrecompiles: true
+		})
+
+		vm.stateManager = stateManager
+		vm.blockchain = stateManager.blockchain
+		vm.trie = stateManager.trie
+		vm.stateManager.checkpoint()
+
+		var web3VM = new vm.Web3VMProvider()
+		web3VM.setVM(vm)
+*/
 
 		global.web3 = new Web3(ganache.provider({
 			"accounts": [
@@ -250,6 +289,8 @@ export class SolidityRuntime extends EventEmitter {
 			],
 			"locked": false
 		}));
+
+		init.extendWeb3(global.web3);
 
 		this.deploy(constructorArgs);
 
@@ -267,28 +308,6 @@ export class SolidityRuntime extends EventEmitter {
 			this.continue();
 		}
 	}
-
-	/**
-	 * Start executing the given program.
-	 */
-
-	 /*
-	public start(contract: string, contractAddress: string, stopOnEntry: boolean, args: any[]) {
-
-		this.loadSource(contract);
-		this._currentLine = -1;
-
-		this.verifyBreakpoints(this._sourceFile);
-
-		if (stopOnEntry) {
-			// we step once
-			this.step(false, 'stopOnEntry');
-		} else {
-			// we just start to run until we hit a breakpoint or an exception
-			this.continue();
-		}
-	}
-	*/
 
 	/**
 	 * Continue execution to the end/beginning.
@@ -395,6 +414,9 @@ export class SolidityRuntime extends EventEmitter {
 			this.sendEvent('stopOnEntry');
 		} else {
 			for (let ln = this._currentLine+1; ln < this._sourceLines.length; ln++) {
+
+				//this._codeManager.resolveStep(index, this._transaction);
+
 				if (this.fireEventsForLine(ln, stepEvent)) {
 					this._currentLine = ln;
 					return true;

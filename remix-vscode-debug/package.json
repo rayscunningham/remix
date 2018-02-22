@@ -71,7 +71,8 @@
 	"main": "./out/extension",
 	"activationEvents": [
 		"onDebug",
-		"onCommand:extension.solidity-debug.getConstructorArgs"
+		"onCommand:extension.solidity-debug.getConstructorArgs",
+		"onCommand:sample.showQuickPick"
 	],
 	"contributes": {
 		"breakpoints": [
@@ -189,6 +190,10 @@
 				"command": "extension.solidity-debug.getFunctionArgs",
 				"title": "Call Function",
 				"category": "Solidity Debug"
+			},
+			{
+				"command": "sample.showQuickPick",
+				"title": "Sample: Show Quick Pick"
 			}
 		]
 	}

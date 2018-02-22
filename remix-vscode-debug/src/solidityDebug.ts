@@ -12,8 +12,9 @@ import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
 import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
 
-import { EventManager, SourceLocationTracker, global } from 'remix-lib';
+import { EventManager, SourceLocationTracker, global, helpers } from 'remix-lib';
 import { trace, code } from 'remix-core';
+import { SolidityTraceManager }  from './solidityTraceManager';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
 
 import * as ethJSABI from 'ethereumjs-abi';
@@ -22,6 +23,9 @@ import * as  ethJSUtil from 'ethereumjs-util';
 import * as path from 'path';
 import * as solc from 'solc';
 import * as fs from 'fs';
+
+import { OffsetToColumnConverter } from './offsetToColumnConverter';
+
 
 //import * as ganache from 'ganache-core';
 //import * as Web3 from 'web3';
@@ -63,20 +67,40 @@ class SolidityDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<string>();
 
 	private _eventManager: EventManager;
+	public get event() {
+		return this._eventManager;
+	}
 
 	private _traceManager: trace.TraceManager;
+	public get traceManager() {
+		return this._traceManager;
+	}
 
 	private _codeManager: code.CodeManager;
+	public get codeManager() {
+		return this._codeManager;
+	}
 
 	private _solidityProxy: SolidityProxy;
+	public get solidityProxy() {
+		return this._solidityProxy;
+	}
 
 	private _internalCallTree: InternalCallTree;
+	public get callTree() {
+		return this._internalCallTree;
+	}
+
+	private _breakpointManager: code.BreakpointManager;
 
 	private _sourceLocationTracker: SourceLocationTracker;
 
-
-
 	private _currentStepIndex: number;
+	public get currentStepIndex() {
+		return this._currentStepIndex;
+	}
+
+	private _offsetToColumnConverter: OffsetToColumnConverter = new OffsetToColumnConverter();
 
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
@@ -120,7 +144,7 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		this._eventManager = new EventManager();
 
-		this._currentStepIndex = -1
+		this._currentStepIndex = -1;
 
 		this._traceManager = new trace.TraceManager();
 		this._codeManager = new code.CodeManager(this._traceManager);
@@ -128,48 +152,48 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
 
-
 		const self = this;
 
 		this._eventManager.register('indexChanged', this, (index) => {
-			this._codeManager.resolveStep(index, this._runtime.transaction)
+			self._codeManager.resolveStep(index, this._runtime.transaction)
 		})
 
 		this._codeManager.event.register('changed', this, (code, address, instIndex) => {
-			this._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
+			self._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
 				if (!error) {
 					self._eventManager.trigger('sourceLocationChanged', [sourceLocation])
 				}
 			})
 		})
-		/*
-
 
 		this._runtime.eventManager.register('newTraceRequested', this, (blockNumber, txHash, tx) => {
-			//self.startDebugging(blockNumber, txIndex, tx)
+			//this.startDebugging(blockNumber, txIndex, tx)
 
-			//self.startDebugging(txHash);
-
-
+			self.startDebugging(tx);
 		})
-		*/
+
+
 
 	}
 
-	private startDebugging(transactionHash: string) {
-		global.web3.currentProvider.sendAsync({
-			method: "debug_traceTransaction",
-			params: [transactionHash,
-				{ disableStorage: true,
-					disableMemory: false,
-					disableStack: false,
-					fullStorage: false
-				}],
-			jsonrpc: "2.0",
-			id: "2"
-		}, (err, result) => {
-			console.log("Debug Transaction: " + result)
+	private startDebugging(transaction: any) {
 
+		let self = this;
+		transaction.to = helpers.trace.contractCreationToken('0');
+		this._traceManager.resolveTrace(transaction, function (error, result) {
+			console.log('trace loaded ' + result)
+
+			if (result) {
+
+				self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
+
+				if (self._breakpointManager && self._breakpointManager.hasBreakpoint()) {
+					self._breakpointManager.jumpNextBreakpoint(false)
+				}
+			} else {
+				//self.statusMessage = error ? error.message : 'Trace not loaded'
+				//yo.update(self.view, self.render())
+			}
 		});
 	}
 
@@ -261,13 +285,22 @@ class SolidityDebugSession extends LoggingDebugSession {
 		// start the program in the runtime
 		this._runtime.start(args.contractFilePath, args.compilerOutput, constructorArgs, !!args.stopOnEntry);
 
-		// startDebugging
-
 		//if (compilationResult && compilationResult.sources && compilationResult.contracts) {
 		this._solidityProxy.reset(args.compilerOutput);
+
+
+/*
+		this._traceManager.getCurrentCalledAddressAt(1, (error, result) => {
+			if (error)
+				console.log(error);
+			else
+			  console.log(result);
+		});
+		*/
 		//} else {
 		//	this.solidityProxy.reset({})
 		//}
+
 
 		this.sendResponse(response);
 	}
@@ -315,7 +348,13 @@ class SolidityDebugSession extends LoggingDebugSession {
 		const stk = this._runtime.stack(startFrame, endFrame);
 
 		response.body = {
-			stackFrames: stk.frames.map(f => new StackFrame(f.index, f.name, this.createSource(f.file), this.convertDebuggerLineToClient(f.line))),
+			stackFrames: stk.frames.map(f => {
+				//new StackFrame(f.index, f.name, this.createSource(f.file), this.convertDebuggerLineToClient(f.line))
+
+				let stackFrame = <DebugProtocol.StackFrame> { id: f.index, name: f.name, source: this.createSource(f.file), line: this.convertDebuggerLineToClient(f.line), endLine: 12 };
+				return stackFrame;
+
+			}),
 			totalFrames: stk.count
 		};
 		this.sendResponse(response);
@@ -468,6 +507,17 @@ class SolidityDebugSession extends LoggingDebugSession {
 		this._runtime.step(true);
 		this.sendResponse(response);
 	}
+
+	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
+		//this._runtime.step(true);
+		this.sendResponse(response);
+	}
+
+	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments): void {
+		//this._runtime.step(true);
+		this.sendResponse(response);
+	}
+
 
 	protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): void {
 
