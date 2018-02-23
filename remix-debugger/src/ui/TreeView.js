@@ -1,23 +1,52 @@
 'use strict'
 var yo = require('yo-yo')
-var style = require('./styles/treeView')
-var remixLib = require('remix-lib')
-var ui = remixLib.helpers.ui
+var csjs = require('csjs-inject')
+var css = csjs`
+  .li_tv {
+    list-style-type: none;
+    -webkit-margin-before: 0px;
+    -webkit-margin-after: 0px;
+    -webkit-margin-start: 0px;
+    -webkit-margin-end: 0px;
+    -webkit-padding-start: 0px;
+    margin-left: 10px;
+  }
+  .ul_tv {
+    list-style-type: none;
+    -webkit-margin-before: 0px;
+    -webkit-margin-after: 0px;
+    -webkit-margin-start: 0px;
+    -webkit-margin-end: 0px;
+    -webkit-padding-start: 0px;
+  }
+  .caret_tv {
+    width: 10px;
+  }
+  .label_tv {
+    display: flex;
+    align-items: center;
+  }
+`
 
+var remixLib = require('remix-lib')
+var EventManager = remixLib.EventManager
+
+/**
+ * TreeView
+ *  - extendable by specifying custom `extractData` and `formatSelf` function
+ *  - trigger `nodeClick` and `leafClick`
+ */
 class TreeView {
 
   constructor (opts) {
+    this.event = new EventManager()
     this.extractData = opts.extractData || this.extractDataDefault
     this.formatSelf = opts.formatSelf || this.formatSelfDefault
     this.view = null
-    this.cssLabel = ui.formatCss(opts.css || {}, style.label)
-    this.cssUl = ui.formatCss(opts.css || {}, style.cssUl)
-    this.cssLi = ui.formatCss(opts.css || {}, style.cssLi)
-    this.nodeIsExpanded = {}
   }
 
-  render (json) {
-    var view = this.renderProperties(json, false)
+  render (json, expand) {
+    var view = this.renderProperties(json, expand)
     if (!this.view) {
       this.view = view
     }
@@ -33,36 +62,95 @@ class TreeView {
   renderObject (item, parent, key, expand, keyPath) {
     var data = this.extractData(item, parent, key)
     var children = (data.children || []).map((child, index) => {
-      return this.renderObject(child.value, data, child.key, expand, keyPath + ',' + child.key)
+      return this.renderObject(child.value, data, child.key, expand, keyPath + '/' + child.key)
     })
     return this.formatData(key, data, children, expand, keyPath)
   }
 
-  renderProperties (json, expand) {
+  renderProperties (json, expand, key) {
+    key = key || ''
     var children = Object.keys(json).map((innerkey) => {
       return this.renderObject(json[innerkey], json, innerkey, expand, innerkey)
     })
-    return yo`<ul style=${this.cssUl}>${children}</ul>`
+    return yo`<ul key=${key} class="${css.ul_tv}">${children}</ul>`
   }
 
   formatData (key, data, children, expand, keyPath) {
-    var label = yo`<div style=${this.cssLabel}><div class="fa fa-caret-right" style=${ui.formatCss(style.caret)}></div><span style=${ui.formatCss(style.data)}>${this.formatSelf(key, data)}</span></div>`
-    var renderedChildren = ''
-    if (children.length) {
-      renderedChildren = yo`<ul style=${this.cssUl}>${children}</ul>`
-      renderedChildren.style.display = this.nodeIsExpanded[keyPath] !== undefined ? (this.nodeIsExpanded[keyPath] ? 'block' : 'none') : (expand ? 'block' : 'none')
-      label.firstElementChild.className = renderedChildren.style.display === 'none' ? 'fa fa-caret-right' : 'fa fa-caret-down'
-      var self = this
+    var self = this
+    var li = yo`<li key=${key} class=${css.li_tv}></li>`
+    var caret = yo`<div class="fa fa-caret-right caret ${css.caret_tv}"></div>`
+    var label = yo`
+      <div key=${key} class=${css.label_tv}>
+        ${caret}
+        <span>${self.formatSelf(key, data, li)}</span>
+      </div>`
+    li.appendChild(label)
+    if (data.children) {
+      var list = yo`<ul key=${key} class=${css.ul_tv}>${children}</ul>`
+      list.style.display = 'none'
+      caret.className = list.style.display === 'none' ? `fa fa-caret-right caret ${css.caret_tv}` : `fa fa-caret-down caret ${css.caret_tv}`
       label.onclick = function () {
-        this.firstElementChild.className = this.firstElementChild.className === 'fa fa-caret-right' ? 'fa fa-caret-down' : 'fa fa-caret-right'
-        var list = this.parentElement.querySelector('ul')
-        list.style.display = list.style.display === 'none' ? 'block' : 'none'
-        self.nodeIsExpanded[keyPath] = list.style.display === 'block'
+        self.expand(keyPath)
       }
+      label.oncontextmenu = function (event) {
+        self.event.trigger('nodeRightClick', [key, data, label, event])
+      }
+      li.appendChild(list)
     } else {
-      label.firstElementChild.style.visibility = 'hidden'
+      caret.style.visibility = 'hidden'
+      label.oncontextmenu = function (event) {
+        self.event.trigger('leafRightClick', [key, data, label, event])
+      }
+      label.onclick = function (event) {
+        self.event.trigger('leafClick', [key, data, label, event])
+      }
     }
-    return yo`<li style=${this.cssLi}>${label}${renderedChildren}</li>`
+    return li
+  }
+
+  isExpanded (path) {
+    var current = this.nodeAt(path)
+    if (current) {
+      return current.style.display !== 'none'
+    }
+    return false
+  }
+
+  expand (path) {
+    var caret = this.caretAt(path)
+    var node = this.nodeAt(path)
+    if (node) {
+      node.style.display = node.style.display === 'none' ? 'block' : 'none'
+      caret.className = node.style.display === 'none' ? `fa fa-caret-right caret ${css.caret_tv}` : `fa fa-caret-down caret ${css.caret_tv}`
+      this.event.trigger('nodeClick', [path, node])
+    }
+  }
+
+  caretAt (path) {
+    var label = this.labelAt(path)
+    if (label) {
+      return label.querySelector('.caret')
+    }
+  }
+
+  itemAt (path) {
+    return this.view.querySelector(`li[key="${path}"]`)
+  }
+
+  labelAt (path) {
+    return this.view.querySelector(`div[key="${path}"]`)
+  }
+
+  nodeAt (path) {
+    return this.view.querySelector(`ul[key="${path}"]`)
+  }
+
+  updateNodeFromJSON (path, jsonTree, expand) {
+    var newTree = this.renderProperties(jsonTree, expand, path)
+    var current = this.nodeAt(path)
+    if (current && current.parentElement) {
+      current.parentElement.replaceChild(newTree, current)
+    }
   }
 
   formatSelfDefault (key, data) {
@@ -76,14 +164,20 @@ class TreeView {
         return {key: index, value: item}
       })
       ret.self = 'Array'
+      ret.isNode = true
+      ret.isLeaf = false
     } else if (item instanceof Object) {
       ret.children = Object.keys(item).map((key) => {
         return {key: key, value: item[key]}
       })
       ret.self = 'Object'
+      ret.isNode = true
+      ret.isLeaf = false
     } else {
       ret.self = item
       ret.children = []
+      ret.isNode = false
+      ret.isLeaf = true
     }
     return ret
   }

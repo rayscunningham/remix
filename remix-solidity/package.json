@@ -1,6 +1,6 @@
 {
   "name": "remix-solidity",
-  "version": "0.0.5",
+  "version": "0.0.8",
   "description": "Ethereum IDE and tools for the web",
   "contributors": [
     {
@@ -21,17 +21,19 @@
     "ethereumjs-util": "^4.5.0",
     "ethereumjs-vm": "2.3.1",
     "fast-async": "^6.1.2",
-    "npm-link-local": "^1.1.0",
     "remix-core": "latest",
     "remix-lib": "latest",
-    "solc": "^0.4.13",
+    "webworkify": "^1.2.1",
+    "solc": "https://github.com/ethereum/solc-js",
+    "npm-run-all": "^4.0.2",
     "standard": "^7.0.1",
     "tape": "^4.6.0"
   },
   "scripts": {
-    "postinstall": "npm-link-local ../remix-lib && npm-link-local ../remix-core",
     "test": "standard && npm run downloadsolc && tape ./test/tests.js",
-    "downloadsolc": "test -e soljson.js || wget https://ethereum.github.io/solc-bin/soljson.js"
+    "downloadsolc": "cd node_modules/solc && (test -e soljson.js || wget https://ethereum.github.io/solc-bin/soljson.js) && cd ..",
+    "prepublish": "mkdirp build; npm-run-all -ls downloadsolc",
+    "postinstall": "npm-run-all -ls downloadsolc"
   },
   "standard": {
     "ignore": [
