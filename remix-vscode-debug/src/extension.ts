@@ -8,7 +8,8 @@ import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { SolidityCompiler } from './solidityCompiler';
+import { SolidityCompiler, SolidityCompilerType, CompilationSource, CompilationResult } from './solidityCompiler';
+import { Compiler } from 'remix-solidity';
 import { SampleHelpers } from './sampleHelpers';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -85,7 +86,14 @@ function showQuickPick()
     }
 class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider {
 
-	private _solidityCompiler = new SolidityCompiler();
+	private _solidityCompiler: SolidityCompiler;
+
+
+	/*
+	private _solidityCompiler = new Compiler((url, callback) => {
+
+	});
+	*/
 
 	/**
 	 * Massage a debug configuration just before a debug session is being launched,
@@ -118,14 +126,26 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 
 		const contractName = path.basename(contractFilePath, '.sol');
 
-		const compilerOutput = this._solidityCompiler.compile(contractName, contractCode, false);
+		this._solidityCompiler = new SolidityCompiler(SolidityCompilerType.DEFAULT);
+
+		//this._solidityCompiler.loadVersion(false, "https://ethereum.github.io/solc-bin/bin/soljson-v0.4.20+commit.3155dd80.js");
+		const contractFile = path.basename(contractFilePath);
+
+		let sources = { [contractFilePath]: {
+			content: contractCode }};
+		//sources[contractFile] = { contractCode };
+
+		const compilationSource = <CompilationSource> {sources: sources, target: contractFilePath };
+
+		const compilationResult = this._solidityCompiler.compile(compilationSource);
+		const compilerOutput = compilationResult.data;
 
 		if (compilerOutput.errors && compilerOutput.errors.length >= 0) {
 
 			const outputChannel = vscode.window.createOutputChannel('Debugger Solidity Compilation');
 			outputChannel.clear();
 
-			outputChannel.appendLine("Solidity Compiler Version: " + this._solidityCompiler.getVersion() );
+			//outputChannel.appendLine("Solidity Compiler Version: " + this._solidityCompiler.getVersion() );
 			outputChannel.appendLine("");
 
 			compilerOutput.errors.forEach((error) => {
@@ -139,14 +159,15 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 			return;
 		}
 
-		config.compilerOutput = compilerOutput;
-		config.contractByteCode = compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
+		//config.compilerOutput = compilerOutput;
+		config.compilationResult = compilationResult;
+		//config.contractByteCode = compilerOutput.contracts[contractFilePath][contractName].evm.bytecode;
 
-		const contractAbi = compilerOutput.contracts[contractName + '.sol'][contractName].abi;
-		config.contractAbi = contractAbi;
+		const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
+		//config.contractAbi = contractAbi;
 
-		for (var i = 0; i < contractAbi.length; i++) {
-      if (contractAbi[i].type === 'constructor') {
+		for (let i = 0; i < contractAbi.length; i++) {
+			if (contractAbi[i].type === 'constructor') {
 
 				const constructorInputs = contractAbi[i].inputs ;
 				let parameters = '';
@@ -167,9 +188,15 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 					config.constructorArgs = "${command:AskForConstructorArgs}";
 				}
 
-        break;
+				break;
 			}
+
 		}
+
+		return config;
+
+
+
 
 		/*
 		// if launch.json is missing or empty
@@ -184,6 +211,6 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 		}
 		*/
 
-		return config;
+		//return config;
 	}
 }

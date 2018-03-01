@@ -12,9 +12,13 @@ import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
 import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
 
-import { EventManager, SourceLocationTracker, global, helpers } from 'remix-lib';
+import { SourceMappingDecoder, EventManager, init, helpers } from 'remix-lib';
+var remixLib = require('remix-lib');
+
+import * as ganache from 'ganache-core';
+import * as Web3 from 'web3';
+
 import { trace, code } from 'remix-core';
-import { SolidityTraceManager }  from './solidityTraceManager';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
 
 import * as ethJSABI from 'ethereumjs-abi';
@@ -29,6 +33,7 @@ import { OffsetToColumnConverter } from './offsetToColumnConverter';
 
 //import * as ganache from 'ganache-core';
 //import * as Web3 from 'web3';
+import { CompilationResult } from './solidityCompiler';
 
 /**
  * This interface describes the mock-debug specific launch attributes
@@ -38,13 +43,15 @@ import { OffsetToColumnConverter } from './offsetToColumnConverter';
  */
 interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	/** An absolute path to the "contract" to debug. */
-	compilerOutput: any;
+	//compilerOutput: any;
 
-	contractByteCode: any;
-
-	contractAbi: any[];
+	compilationResult: CompilationResult;
 
 	contractFilePath: string;
+
+	//contractByteCode: any;
+
+	//contractAbi: any[];
 
 	constructorParamsDef?: string;
 
@@ -65,6 +72,9 @@ class SolidityDebugSession extends LoggingDebugSession {
 	private _runtime: SolidityRuntime;
 
 	private _variableHandles = new Handles<string>();
+
+	private _tx: any;
+	private _txReceipt: any;
 
 	private _eventManager: EventManager;
 	public get event() {
@@ -93,14 +103,18 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 	private _breakpointManager: code.BreakpointManager;
 
-	private _sourceLocationTracker: SourceLocationTracker;
+
 
 	private _currentStepIndex: number;
 	public get currentStepIndex() {
 		return this._currentStepIndex;
 	}
 
-	private _offsetToColumnConverter: OffsetToColumnConverter = new OffsetToColumnConverter();
+	private _sourceMappingDecoder: SourceMappingDecoder;
+
+	private _lineBreakPositionsByContent: any;
+
+	private _compilationResult: CompilationResult;
 
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
@@ -145,6 +159,70 @@ class SolidityDebugSession extends LoggingDebugSession {
 		this._eventManager = new EventManager();
 
 		this._currentStepIndex = -1;
+/*
+		this._traceManager = new trace.TraceManager();
+		this._codeManager = new code.CodeManager(this._traceManager);
+		this._solidityProxy = new SolidityProxy(this._traceManager, this._codeManager)
+
+		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
+
+		this._sourceMappingDecoder = new SourceMappingDecoder()
+		const self = this;
+
+		this._eventManager.register('indexChanged', this, (index) => {
+			self._codeManager.resolveStep(index, this._runtime.transaction)
+		})
+
+		this._codeManager.event.register('changed', this, (code, address, index) => {
+			self._internalCallTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, index, self._compilationResult.data.contracts, function (error, rawLocation) {
+				if (!error) {
+					var lineColumnPos = self.offsetToLineColumn(rawLocation, rawLocation.file, self._compilationResult)
+					//self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
+				} else {
+					//self.appAPI.currentSourceLocation(null)
+				}
+			})
+
+			self._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
+				if (!error) {
+
+
+					self._eventManager.trigger('sourceLocationChanged', [sourceLocation])
+				}
+			})
+		})
+
+		*/
+/*
+		codeManager.event.register('changed', this, function (code, address, index) {
+			if (self.appAPI.lastCompilationResult()) {
+				this.debugger.callTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, index, self.appAPI.lastCompilationResult().data.contracts, function (error, rawLocation) {
+					if (!error) {
+						var lineColumnPos = self.appAPI.offsetToLineColumn(rawLocation, rawLocation.file)
+						self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
+					} else {
+						self.appAPI.currentSourceLocation(null)
+					}
+				})
+*/
+/*
+		this._runtime.eventManager.register('newTraceRequested', this, (blockNumber, txHash, tx) => {
+			//this.startDebugging(blockNumber, txIndex, tx)
+
+			self.startDebugging(tx);
+		})
+*/
+	}
+
+	private offsetToLineColumn(rawLocation, file, compilationResult) {
+		if (!this._lineBreakPositionsByContent[file]) {
+			var filename = Object.keys(compilationResult.data.sources)[file]
+			this._lineBreakPositionsByContent[file] = this._sourceMappingDecoder.getLinebreakPositions(compilationResult.source.sources[filename].content)
+		}
+		return this._sourceMappingDecoder.convertOffsetToLineColumn(rawLocation, this._lineBreakPositionsByContent[file])
+	}
+
+	private startDebugging(transaction: any) {
 
 		this._traceManager = new trace.TraceManager();
 		this._codeManager = new code.CodeManager(this._traceManager);
@@ -152,33 +230,34 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
 
+		this._sourceMappingDecoder = new SourceMappingDecoder();
+
+		/*
 		const self = this;
 
 		this._eventManager.register('indexChanged', this, (index) => {
 			self._codeManager.resolveStep(index, this._runtime.transaction)
 		})
 
-		this._codeManager.event.register('changed', this, (code, address, instIndex) => {
+		this._codeManager.event.register('changed', this, (code, address, index) => {
+			self._internalCallTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, index, self._compilationResult.data.contracts, function (error, rawLocation) {
+				if (!error) {
+					var lineColumnPos = self.offsetToLineColumn(rawLocation, rawLocation.file, self._compilationResult)
+					//self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
+				} else {
+					//self.appAPI.currentSourceLocation(null)
+				}
+			})
+
 			self._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
 				if (!error) {
+
+
 					self._eventManager.trigger('sourceLocationChanged', [sourceLocation])
 				}
 			})
 		})
 
-		this._runtime.eventManager.register('newTraceRequested', this, (blockNumber, txHash, tx) => {
-			//this.startDebugging(blockNumber, txIndex, tx)
-
-			self.startDebugging(tx);
-		})
-
-
-
-	}
-
-	private startDebugging(transaction: any) {
-
-		let self = this;
 		transaction.to = helpers.trace.contractCreationToken('0');
 		this._traceManager.resolveTrace(transaction, function (error, result) {
 			console.log('trace loaded ' + result)
@@ -195,33 +274,59 @@ class SolidityDebugSession extends LoggingDebugSession {
 				//yo.update(self.view, self.render())
 			}
 		});
+
+		*/
 	}
 
-	private decodeInputParams(data: any, abi: any) {
-		data = ethJSUtil.toBuffer('0x' + data)
 
-		let constructorInputs: any;
+	private async deploy(compilationResult: CompilationResult, constructorArgs: any[]) {
 
-		for (var i = 0; i < abi.length; i++) {
-      if (abi[i].type === 'constructor') {
-				constructorInputs = abi[i].inputs;
-				break;
-			}
+		const contractFilePath = compilationResult.source.target;
+
+		const contractName = path.basename(contractFilePath, '.sol');
+
+		const compilerOutput = compilationResult.data;
+	  //const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
+		const contractByteCode = compilerOutput.contracts[contractFilePath][contractName].evm.bytecode;
+
+		try {
+
+			const accounts = await this._runtime.getAccounts();
+			const byteCode = contractByteCode.object;
+			const gasEstimate = await this._runtime.estimateGas(byteCode);
+
+			const contract = await this._runtime.deployContract(accounts[0], constructorArgs, gasEstimate, compilationResult);
+
+			console.log("Contract Address: " + contract.address);
+
+			this._tx = await this._runtime.getTransaction(contract.transactionHash);
+			this._txReceipt = await this._runtime.getTransactionReceipt(contract.transactionHash);
+
+			this.startDebugging(this._tx);
+
+			let self = this;
+			this._tx.to = helpers.trace.contractCreationToken('0');
+			this._traceManager.resolveTrace(this._tx, function (error, result) {
+				console.log('trace loaded ' + result)
+
+				if (result) {
+
+					self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
+
+					if (self._breakpointManager && self._breakpointManager.hasBreakpoint()) {
+						self._breakpointManager.jumpNextBreakpoint(false)
+					}
+				} else {
+					//self.statusMessage = error ? error.message : 'Trace not loaded'
+					//yo.update(self.view, self.render())
+				}
+			});
+
+		} catch(error) {
+			console.log(error);
 		}
+	}
 
-		let inputTypes: any[] = [];
-		for (var i = 0; i < constructorInputs.length; i++) {
-			inputTypes.push(constructorInputs[i].type)
-		}
-		let decoded = ethJSABI.rawDecode(inputTypes, data)
-		decoded = ethJSABI.stringify(inputTypes, decoded)
-		let ret: any = {}
-		for (var k in constructorInputs) {
-			ret[constructorInputs[k].type + ' ' + constructorInputs[k].name] = decoded[k]
-		}
-		return ret;
-
-  }
 
 	/**
 	 * The 'initialize' request is the first request called by the frontend
@@ -251,20 +356,19 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 	protected launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments): void {
 
-		//const contractCode = fs.readFileSync(args.contractFilePath, 'utf8');
+		this._compilationResult = args.compilationResult;
 
-		//const compiledContract = solc.compile(contractCode, 1);
+		const compilerOutput = this._compilationResult.data;
 
-		//const contractName = path.basename(args.contract, '.sol');
-
-		//const abi = JSON.parse(compiledContract.contracts[':' +contractName].interface);
-		//const byteCode = compiledContract.contracts[':' +contractName].bytecode;
+		const contractFilePath = args.contractFilePath;
+		const contractName = path.basename(contractFilePath, '.sol');
+		const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
 
 		let constructorArgs: any[] = [];
 		if (args.constructorArgs !== undefined) {
 			constructorArgs = args.constructorArgs.split(',');
 
-			const abi = args.contractAbi;
+			const abi = contractAbi;
 			for (var i = 0; i < abi.length; i++) {
 				if (abi[i].type === 'constructor') {
 					const constructorInputs = abi[i].inputs ;
@@ -279,14 +383,32 @@ class SolidityDebugSession extends LoggingDebugSession {
 
 		}
 
+
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
 
 		// start the program in the runtime
-		this._runtime.start(args.contractFilePath, args.compilerOutput, constructorArgs, !!args.stopOnEntry);
+		this._runtime.start(this._compilationResult, constructorArgs, !!args.stopOnEntry);
+    this.deploy(this._compilationResult, constructorArgs);
+		//this.startDebugging(this._runtime.transaction());
 
 		//if (compilationResult && compilationResult.sources && compilationResult.contracts) {
-		this._solidityProxy.reset(args.compilerOutput);
+		this._solidityProxy.reset(compilerOutput);
+
+		const contractCode = fs.readFileSync(contractFilePath, 'utf8');
+
+		let nodes = this._sourceMappingDecoder.nodesAtPosition(null, 0, compilerOutput.sources[contractFilePath])
+
+		var position = this._sourceMappingDecoder.decode(nodes[0].src);
+
+		//var lineColumn = offsetToLineColumnConverter.offsetToLineColumn(position, position.file, compiler.lastCompilationResult)
+		let lineBreakPositionsByContent = {};
+
+			if (!lineBreakPositionsByContent[position.file]) {
+				var filename = Object.keys(compilerOutput.sources)[position.file]
+				lineBreakPositionsByContent[position.file] = this._sourceMappingDecoder.getLinebreakPositions(contractCode)
+			}
+			let lineColumn = this._sourceMappingDecoder.convertOffsetToLineColumn(position, lineBreakPositionsByContent[position.file])
 
 
 /*
@@ -382,12 +504,11 @@ class SolidityDebugSession extends LoggingDebugSession {
 		const variables = new Array<DebugProtocol.Variable>();
 		const id = this._variableHandles.get(args.variablesReference);
 		if (id !== null) {
-
+/*
 			if (id.startsWith("tx_")) {
 
 				const inputData = this._runtime.transaction.input.replace('0x', '')
 				const bytecode = this._runtime.contractByteCode.object;
-				const inputParams = this.decodeInputParams(inputData.substring(bytecode.length), this._runtime.contractAbi)
 
 				variables.push({
 					name: "blockHash",
@@ -479,7 +600,10 @@ class SolidityDebugSession extends LoggingDebugSession {
 					value: "Object",
 					variablesReference: this._variableHandles.create("object_")
 				});
+
 			}
+
+			*/
 		}
 
 		response.body = {

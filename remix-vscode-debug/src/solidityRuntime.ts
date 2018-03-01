@@ -10,18 +10,18 @@ import * as path from 'path';
 import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
 
-import { EventManager, SourceLocationTracker, global, init } from 'remix-lib';
+import { EventManager, init } from 'remix-lib';
+//var remixLib = require('remix-lib');
+//var global = remixLib.global;
+
+declare var global: any;
+
 import { trace, code } from 'remix-core';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
 
 import * as EthJSVM from 'ethereumjs-vm';
 import * as StateManager from 'ethereumjs-vm/lib/stateManager';
-
-import * as ethUtil from 'ethereumjs-util';
-
-import { vm } from 'remix-lib';
-
-//var StateManager = require('ethereumjs-vm/lib/stateManager')
+import { CompilationResult } from './solidityCompiler';
 
 export interface SolidityBreakpoint {
 	id: number;
@@ -29,49 +29,6 @@ export interface SolidityBreakpoint {
 	verified: boolean;
 }
 
-class StateManagerCommonStorageDump extends StateManager {
-
-	private keyHashes: any;
-
-  constructor (arg) {
-    super(arg)
-    this.keyHashes = {}
-	}
-
-	get blockchain() {
-		return super.blockchain;
-	}
-
-	get trie() {
-		return super.trie;
-	}
-
-  putContractStorage (address, key, value, cb) {
-    this.keyHashes[ethUtil.sha3(key).toString('hex')] = ethUtil.bufferToHex(key)
-    super.putContractStorage(address, key, value, cb)
-  }
-
-  dumpStorage (address, cb) {
-    var self = this
-    super._getStorageTrie(address, function (err, trie) {
-      if (err) {
-        return cb(err)
-      }
-      var storage = {}
-      var stream = trie.createReadStream()
-      stream.on('data', function (val) {
-        var value = ethUtil.rlp.decode(val.value)
-        storage['0x' + val.key.toString('hex')] = {
-          key: self.keyHashes[val.key.toString('hex')],
-          value: '0x' + value.toString('hex')
-        }
-      })
-      stream.on('end', function () {
-        cb(storage)
-      })
-    })
-	}
-}
 
 /**
  * A Solidity runtime with minimal debugger functionality.
@@ -89,8 +46,6 @@ export class SolidityRuntime extends EventEmitter {
 		return this._eventManager;
 	}
 
-	//private _web3Providers: vm.Web3Providers;
-
 	// the contents (= lines) of the one and only file
 	private _sourceLines: string[];
 
@@ -106,16 +61,12 @@ export class SolidityRuntime extends EventEmitter {
 
 	private _currentStepIndex = -1;
 
-	private _compilerOutput: any;
-	private _contractAbi: any;
-	public get contractAbi() {
-		return this._contractAbi;
+	private _contract: any;
+	public get contract() {
+		return this._contract;
 	}
 
-	private _contractByteCode: any;
-	public get contractByteCode() {
-		return this._contractByteCode;
-	}
+
 
 	private _transaction: any;
 	public get transaction() {
@@ -131,37 +82,47 @@ export class SolidityRuntime extends EventEmitter {
 		super();
 	}
 
-	private async deploy(constructorArgs: any[]) {
+	private async deploy(constructorArgs: any[], compilationResult: CompilationResult) {
+
+		const contractFilePath = compilationResult.source.target;
+
+		const contractName = path.basename(contractFilePath, '.sol');
+
+		const compilerOutput = compilationResult.data;
+	  const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
+		const contractByteCode = compilerOutput.contracts[contractFilePath][contractName].evm.bytecode;
 
 		try {
+
 			const accounts = await this.getAccounts();
-			const byteCode = this._contractByteCode.object;
+			const byteCode = contractByteCode.object;
 			const gasEstimate = await this.estimateGas(byteCode);
 
-			const contract = await this.deployContract(accounts[0], constructorArgs, gasEstimate);
+			this._contract = await this.deployContract(accounts[0], constructorArgs, gasEstimate, compilationResult);
 
-			console.log("Contract Address: " + contract.address);
+			console.log("Contract Address: " + this._contract.address);
 
-			this._transaction = await this.getTransaction(contract.transactionHash);
-			this._transactionReceipt = await this.getTransactionReceipt(contract.transactionHash);
-
+			this._transaction = await this.getTransaction(this._contract.transactionHash);
+			this._transactionReceipt = await this.getTransactionReceipt(this._contract.transactionHash);
+/*
 			const debugTrace = await this.getTrace(contract.transactionHash);
 
-			console.log("Debug Trace: " + debugTrace.result.gas);
+			console.log("Debug Trace: " + debugTrace.gas);
 
 			console.log("Transaction Block Number: " + this._transaction.blockNumber);
 			console.log("Transaction Gas: " + this._transaction.gas);
 			console.log("Transaction Gas Price: " + this._transaction.gasPrice);
 
 			this._eventManager.trigger('newTraceRequested', [this._transaction.blockNumber, this._transaction.hash, this._transaction])
+*/
 		} catch(error) {
 			console.log(error);
 		}
 	}
 
-	private estimateGas(byteCode: string) {
+	public estimateGas(byteCode: string) {
 		return new Promise<number>( (resolve, reject) => {
-				global.web3.eth.estimateGas( {data: byteCode}, (error, result) => {
+			global.web3.eth.estimateGas( {data: byteCode}, (error, result) => {
 					if(error !== null)
 						reject(error);
 					else
@@ -170,9 +131,9 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	private getAccounts() {
-		return new Promise( (resolve, reject) => {
-			global.web3.eth.getAccounts( (error, result) => {
+	public getAccounts() {
+		return new Promise((resolve, reject) => {
+			global.web3.eth.getAccounts((error, result) => {
 				if(error !== null)
 					reject(error);
 				else
@@ -181,12 +142,18 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	private deployContract(account: string, constructorArgs: any[], gasEstimate: number) {
-		return new Promise<any>( (resolve, reject) => {
-      const contract = global.web3.eth.contract(this._contractAbi);
+	public deployContract(account: string, constructorArgs: any[], gasEstimate: number, compilationResult: CompilationResult) {
 
-			contract.new(constructorArgs, {
-				data: '0x' + this._contractByteCode.object,
+		return new Promise<any>((resolve, reject) => {
+
+			const contractFilePath = compilationResult.source.target;
+			const contractName = path.basename(contractFilePath, '.sol');
+			const compilerOutput = compilationResult.data;
+			const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
+			const contractByteCode = compilerOutput.contracts[contractFilePath][contractName].evm.bytecode;
+
+      global.web3.eth.contract(contractAbi).new(constructorArgs, {
+				data: '0x' + contractByteCode.object,
 				from: account,
 				gas: gasEstimate + 40000
 			}, (error, result) => {
@@ -211,7 +178,7 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	private getTransaction(transactionHash: string) {
+	public getTransaction(transactionHash: string) {
 		return new Promise<any>( (resolve, reject) => {
 			global.web3.eth.getTransaction(transactionHash, (error, result) => {
 				if(error !== null)
@@ -222,7 +189,7 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	private getTransactionReceipt(transactionHash: string) {
+	public getTransactionReceipt(transactionHash: string) {
 		return new Promise<any>( (resolve, reject) => {
 			global.web3.eth.getTransactionReceipt(transactionHash, (error, result) => {
 				if(error !== null)
@@ -233,8 +200,16 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	private getTrace(transactionHash: string) {
+	public getTrace(transactionHash: string) {
 		return new Promise<any>( (resolve, reject) => {
+
+			global.web3.debug.traceTransaction(transactionHash,
+				{ disableStorage: true,
+				disableMemory: false,
+				disableStack: false,
+				fullStorage: false
+			}
+			/*
 			global.web3.currentProvider.sendAsync({
 			method: "debug_traceTransaction",
 			params: [transactionHash,
@@ -245,7 +220,9 @@ export class SolidityRuntime extends EventEmitter {
 				}],
 			jsonrpc: "2.0",
 			id: "2"
-			}, (error, result) => {
+			}
+			*/
+			, (error, result) => {
 
 				if (error !== null)
 					reject(error)
@@ -256,32 +233,13 @@ export class SolidityRuntime extends EventEmitter {
 		})
 	}
 
+
 	/**
 	 * Start executing the given program.
 	 */
-	public start(contractFilePath: string, compilerOutput: any, constructorArgs: any[], stopOnEntry: boolean) {
+	public start(compilationResult: CompilationResult, constructorArgs: any[], stopOnEntry: boolean) {
 
-		this._compilerOutput = compilerOutput;
-
-		const contractName = path.basename(contractFilePath, '.sol');
-
-		this._contractAbi = this._compilerOutput.contracts[contractName + '.sol'][contractName].abi;
-		this._contractByteCode = this._compilerOutput.contracts[contractName + '.sol'][contractName].evm.bytecode;
-/*
-		var stateManager = new StateManagerCommonStorageDump({})
-		var vm = new EthJSVM({
-			enableHomestead: true,
-			activatePrecompiles: true
-		})
-
-		vm.stateManager = stateManager
-		vm.blockchain = stateManager.blockchain
-		vm.trie = stateManager.trie
-		vm.stateManager.checkpoint()
-
-		var web3VM = new vm.Web3VMProvider()
-		web3VM.setVM(vm)
-*/
+		const contractFilePath = compilationResult.source.target;
 
 		global.web3 = new Web3(ganache.provider({
 			"accounts": [
@@ -292,8 +250,8 @@ export class SolidityRuntime extends EventEmitter {
 
 		init.extendWeb3(global.web3);
 
-		this.deploy(constructorArgs);
 
+		//this.deploy(constructorArgs, compilationResult);
 
 		this.loadSource(contractFilePath);
 		this._currentLine = -1;

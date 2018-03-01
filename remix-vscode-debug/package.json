@@ -32,21 +32,22 @@
 		"url": "https://github.com/Microsoft/vscode-mock-debug/issues"
 	},
 	"dependencies": {
+		"bignumber.js": "git+https://github.com/frozeman/bignumber.js-nolookahead.git",
 		"ethereumjs-abi": "git+https://github.com/ethereumjs/ethereumjs-abi.git",
-		"ethereumjs-block": "^1.6.0",
+		"ethereumjs-block": "^1.7.1",
 		"ethereumjs-tx": "^1.3.3",
-		"ethereumjs-util": "^5.1.2",
+		"ethereumjs-util": "^5.1.4",
 		"ethereumjs-vm": "2.3.1",
 		"ganache-core": "latest",
 		"remix-core": "latest",
-		"remix-lib": "latest",
+		"remix-ide": "git+https://github.com/ethereum/remix-ide.git",
+		"remix-lib": "^0.1.4",
 		"remix-solidity": "latest",
 		"rimraf": "^2.6.1",
-		"solc": "^0.4.18",
-		"web3": "^0.18.0",
+		"solc": "^0.4.20",
 		"vscode-debugadapter": "1.25.0",
 		"vscode-debugprotocol": "1.25.0",
-		"bignumber.js": "git+https://github.com/frozeman/bignumber.js-nolookahead.git"
+		"web3": "^0.18.0"
 	},
 	"devDependencies": {
 		"@types/node": "7.0.43",
@@ -111,6 +112,11 @@
 								"type": "boolean",
 								"description": "Enable logging of the Debug Adapter Protocol.",
 								"default": true
+							},
+							"compilerVersion": {
+								"type": "string",
+								"description": "Compiler version.",
+								"default": ""
 							}
 						}
 					},
