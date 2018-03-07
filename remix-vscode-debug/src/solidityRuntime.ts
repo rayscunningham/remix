@@ -10,11 +10,7 @@ import * as path from 'path';
 import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
 
-import { EventManager, init } from 'remix-lib';
-//var remixLib = require('remix-lib');
-//var global = remixLib.global;
-
-declare var global: any;
+import  { EventManager, global, init }from 'remix-lib';
 
 import { trace, code } from 'remix-core';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
@@ -29,7 +25,11 @@ export interface SolidityBreakpoint {
 	verified: boolean;
 }
 
-
+export interface TransactionTrace {
+	transaction: any;
+	transactionReceipt: any;
+	trace: any;
+}
 /**
  * A Solidity runtime with minimal debugger functionality.
  */
@@ -61,66 +61,52 @@ export class SolidityRuntime extends EventEmitter {
 
 	private _currentStepIndex = -1;
 
-	private _contract: any;
-	public get contract() {
-		return this._contract;
-	}
-
-
-
-	private _transaction: any;
-	public get transaction() {
-		return this._transaction;
-	}
-
-	private _transactionReceipt: any;
-	public get transactionReceipt() {
-		return this._transactionReceipt;
+	public get currentStepIndex() {
+		return this._currentStepIndex;
 	}
 
 	constructor() {
 		super();
 	}
 
-	private async deploy(constructorArgs: any[], compilationResult: CompilationResult) {
+
+	public deploy(constructorArgs: any[], compilationResult: CompilationResult): Promise<TransactionTrace> {
 
 		const contractFilePath = compilationResult.source.target;
 
 		const contractName = path.basename(contractFilePath, '.sol');
 
 		const compilerOutput = compilationResult.data;
-	  const contractAbi = compilerOutput.contracts[contractFilePath][contractName].abi;
 		const contractByteCode = compilerOutput.contracts[contractFilePath][contractName].evm.bytecode;
+		const byteCode = contractByteCode.object;
 
-		try {
+		return Promise.all([this.getAccounts(), this.estimateGas(byteCode)])
+			.then(values => {
+				const accounts = values[0];
+				const gasEstimate = values[1];
 
-			const accounts = await this.getAccounts();
-			const byteCode = contractByteCode.object;
-			const gasEstimate = await this.estimateGas(byteCode);
+				return this.deployContract(accounts[0], constructorArgs, gasEstimate, compilationResult);
+			})
+			.then(contract => {
+				const txHash = contract.transactionHash;
 
-			this._contract = await this.deployContract(accounts[0], constructorArgs, gasEstimate, compilationResult);
+				return Promise.all([this.getTransaction(txHash),
+					this.getTransactionReceipt(txHash),
+					this.getTrace(txHash)]);
+			})
+			.then(values => {
+				const tx = values[0];
+				const txReceipt = values[1];
+				const debugTrace = values[2];
 
-			console.log("Contract Address: " + this._contract.address);
+				return <TransactionTrace> {transaction: tx, transactionReceipt: txReceipt, trace: debugTrace};
+			})
 
-			this._transaction = await this.getTransaction(this._contract.transactionHash);
-			this._transactionReceipt = await this.getTransactionReceipt(this._contract.transactionHash);
-/*
-			const debugTrace = await this.getTrace(contract.transactionHash);
-
-			console.log("Debug Trace: " + debugTrace.gas);
-
-			console.log("Transaction Block Number: " + this._transaction.blockNumber);
-			console.log("Transaction Gas: " + this._transaction.gas);
-			console.log("Transaction Gas Price: " + this._transaction.gasPrice);
-
-			this._eventManager.trigger('newTraceRequested', [this._transaction.blockNumber, this._transaction.hash, this._transaction])
-*/
-		} catch(error) {
-			console.log(error);
-		}
+			//return <TransactionTrace> {};
+		//this._eventManager.trigger('newTraceRequested', [tx.blockNumber, tx.hash, tx])
 	}
 
-	public estimateGas(byteCode: string) {
+	public estimateGas(byteCode: string): Promise<number> {
 		return new Promise<number>( (resolve, reject) => {
 			global.web3.eth.estimateGas( {data: byteCode}, (error, result) => {
 					if(error !== null)
@@ -131,7 +117,7 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	public getAccounts() {
+	public getAccounts(): Promise<any> {
 		return new Promise((resolve, reject) => {
 			global.web3.eth.getAccounts((error, result) => {
 				if(error !== null)
@@ -142,10 +128,8 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	public deployContract(account: string, constructorArgs: any[], gasEstimate: number, compilationResult: CompilationResult) {
-
+	private deployContract(account: string, constructorArgs: any[], gasEstimate: number, compilationResult: CompilationResult) {
 		return new Promise<any>((resolve, reject) => {
-
 			const contractFilePath = compilationResult.source.target;
 			const contractName = path.basename(contractFilePath, '.sol');
 			const compilerOutput = compilationResult.data;
@@ -175,11 +159,12 @@ export class SolidityRuntime extends EventEmitter {
 					}
 				}
 			})
+
 		});
 	}
 
-	public getTransaction(transactionHash: string) {
-		return new Promise<any>( (resolve, reject) => {
+	public getTransaction(transactionHash: string): Promise<any> {
+		return new Promise<any>((resolve, reject) => {
 			global.web3.eth.getTransaction(transactionHash, (error, result) => {
 				if(error !== null)
 					reject(error);
@@ -189,8 +174,8 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	public getTransactionReceipt(transactionHash: string) {
-		return new Promise<any>( (resolve, reject) => {
+	public getTransactionReceipt(transactionHash: string): Promise<any> {
+		return new Promise<any>((resolve, reject) => {
 			global.web3.eth.getTransactionReceipt(transactionHash, (error, result) => {
 				if(error !== null)
 					reject(error);
@@ -200,71 +185,62 @@ export class SolidityRuntime extends EventEmitter {
 		});
 	}
 
-	public getTrace(transactionHash: string) {
-		return new Promise<any>( (resolve, reject) => {
-
+	public getTrace(transactionHash: string): Promise<any> {
+		return new Promise<any>((resolve, reject) => {
 			global.web3.debug.traceTransaction(transactionHash,
 				{ disableStorage: true,
 				disableMemory: false,
 				disableStack: false,
 				fullStorage: false
-			}
-			/*
-			global.web3.currentProvider.sendAsync({
-			method: "debug_traceTransaction",
-			params: [transactionHash,
-				{ disableStorage: true,
-					disableMemory: false,
-					disableStack: false,
-					fullStorage: false
-				}],
-			jsonrpc: "2.0",
-			id: "2"
-			}
-			*/
-			, (error, result) => {
-
+			}, (error, result) => {
 				if (error !== null)
-					reject(error)
+					reject(error);
 				else
-					resolve(result)
-
+					resolve(result);
 			});
 		})
 	}
 
-
 	/**
 	 * Start executing the given program.
 	 */
-	public start(compilationResult: CompilationResult, constructorArgs: any[], stopOnEntry: boolean) {
+	public start(compilationResult: CompilationResult, constructorArgs: any[], stopOnEntry: boolean): Promise<any> {
 
-		const contractFilePath = compilationResult.source.target;
+		return new Promise<any>((resolve, reject) => {
+			const contractFilePath = compilationResult.source.target;
 
-		global.web3 = new Web3(ganache.provider({
-			"accounts": [
-				{ "balance": "100000000000000000000" }
-			],
-			"locked": false
-		}));
+			global.web3 = new Web3(ganache.provider({
+				"accounts": [
+					{ "balance": "100000000000000000000" }
+				],
+				"locked": false
+			}));
 
-		init.extendWeb3(global.web3);
+			init.extendWeb3(global.web3);
 
+			this.deploy(constructorArgs, compilationResult)
+				.then(transactionTrace => {
 
-		//this.deploy(constructorArgs, compilationResult);
+					const tx = transactionTrace.transaction;
 
-		this.loadSource(contractFilePath);
-		this._currentLine = -1;
+					this.loadSource(contractFilePath);
+					this._currentLine = -1;
 
-		this.verifyBreakpoints(this._sourceFile);
+					this.verifyBreakpoints(this._sourceFile);
 
-		if (stopOnEntry) {
-			// we step once
-			this.step(false, 'stopOnEntry');
-		} else {
-			// we just start to run until we hit a breakpoint or an exception
-			this.continue();
-		}
+					this._eventManager.trigger('newTraceRequested', [tx.blockNumber, tx.hash, tx])
+
+					if (stopOnEntry) {
+						// we step once
+						this.step(false, 'stopOnEntry');
+					} else {
+						// we just start to run until we hit a breakpoint or an exception
+						this.continue();
+					}
+
+					resolve();
+			});
+		});
 	}
 
 	/**
@@ -419,6 +395,10 @@ export class SolidityRuntime extends EventEmitter {
 	private fireEventsForLine(ln: number, stepEvent?: string): boolean {
 
 		const line = this._sourceLines[ln].trim();
+
+		if (line.startsWith('pragma')) {
+			return false;
+		}
 
 		// if 'log(...)' found in source -> send argument to debug console
 		const matches = /log\((.*)\)/.exec(line);

@@ -9,10 +9,24 @@ import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken 
 import * as path from 'path';
 import * as fs from 'fs';
 import { SolidityCompiler, SolidityCompilerType, CompilationSource, CompilationResult } from './solidityCompiler';
-import { Compiler } from 'remix-solidity';
 import { SampleHelpers } from './sampleHelpers';
+//import { SolidityDebugSession } from './solidityDebug';
+//import * as Net from 'net';
+
+//const EMBED_DEBUG_ADAPTER = false;
 
 export function activate(context: vscode.ExtensionContext) {
+
+	vscode.languages.getLanguages().then(languages => {
+		const solLangSupported = languages.find((value, index, obj) => {
+			if (value === 'solidity')
+				return true;
+			else
+				return false;
+
+		// TODO: No solidity language support has been installed
+		});
+	})
 
 
 	context.subscriptions.push(vscode.commands.registerCommand('extension.solidity-debug.getConstructorArgs',
@@ -88,11 +102,12 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 
 	private _solidityCompiler: SolidityCompiler;
 
+	//private _server?: Net.Server;
 
 	/*
-	private _solidityCompiler = new Compiler((url, callback) => {
-
-	});
+	provideDebugConfigurations?(folder: WorkspaceFolder | undefined, token?: CancellationToken): ProviderResult<DebugConfiguration[]> {
+		return;
+	}
 	*/
 
 	/**
@@ -145,7 +160,7 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 			const outputChannel = vscode.window.createOutputChannel('Debugger Solidity Compilation');
 			outputChannel.clear();
 
-			//outputChannel.appendLine("Solidity Compiler Version: " + this._solidityCompiler.getVersion() );
+			outputChannel.appendLine("Solidity Compiler Version: " + this._solidityCompiler.getVersion() );
 			outputChannel.appendLine("");
 
 			compilerOutput.errors.forEach((error) => {
@@ -192,6 +207,19 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 			}
 
 		}
+/*
+		if (EMBED_DEBUG_ADAPTER) {
+			if (!this._server) {
+				this._server = Net.createServer(socket => {
+					const session = new SolidityDebugSession();
+					session.setRunAsServer(true);
+					session.start(<NodeJS.ReadableStream>socket, socket);
+				}).listen(0);
+			}
+
+			config.debugServer = this._server.address().port;
+		}
+*/
 
 		return config;
 
@@ -213,4 +241,12 @@ class SolidityConfigurationProvider implements vscode.DebugConfigurationProvider
 
 		//return config;
 	}
+
+	/*
+	dispose() {
+		if (this._server) {
+			this._server.close();
+		}
+	}
+	*/
 }

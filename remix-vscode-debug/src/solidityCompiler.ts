@@ -29,17 +29,20 @@ export class SolidityCompiler extends EventEmitter {
 
 //private _rootPath: string;
 
-	private compiler: any;
-	private compilerType: SolidityCompilerType = SolidityCompilerType.DEFAULT;
+	private _compiler: any;
+	private _compilerType: SolidityCompilerType = SolidityCompilerType.DEFAULT;
+	public get compilerType() {
+		return this._compilerType;
+	}
 
-	private optimize: boolean;
+	private _optimize: boolean;
 
 	//public currentCompilerSetting: string;
 
 	constructor(compilerType: SolidityCompilerType, args?: any[], optimize?: boolean) {
 		super();
-		this.compilerType = compilerType;
-		this.compiler = require('solc');
+		this._compilerType = compilerType;
+		this._compiler = require('solc');
 	}
 
 	public compileAsynch(compilationSource: CompilationSource): Promise<CompilationResult> {
@@ -56,10 +59,10 @@ export class SolidityCompiler extends EventEmitter {
 
 	public compile(compilationSource: CompilationSource): CompilationResult {
 
-			const input = CompilerInput(compilationSource.sources, {optimize: this.optimize, target: compilationSource.target});
+			const input = CompilerInput(compilationSource.sources, {optimize: this._optimize, target: compilationSource.target});
 			//let result = this.compiler.compileStandardWrapper(input, missingInputsCallback);
 
-			let result = JSON.parse(this.compiler.compileStandardWrapper(input));
+			let result = JSON.parse(this._compiler.compileStandardWrapper(input));
 
 			let compilationResult: CompilationResult = {
 				data: result,
@@ -140,7 +143,7 @@ export class SolidityCompiler extends EventEmitter {
 	*/
 
 	public getVersion(): string {
-		return this.compiler.version();
+		return this._compiler.version();
 	}
 /*
 	public offsetToLineColumn(rawLocation, file, compilationResult) {
