@@ -10,7 +10,7 @@ import {
 } from 'vscode-debugadapter';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
-import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
+import { SolidityRuntime, SolidityBreakpoint, TransactionTrace } from './solidityRuntime';
 
 import { SourceMappingDecoder, EventManager, helpers, util, global } from 'remix-lib';;
 
@@ -20,11 +20,9 @@ import { SolidityProxy, InternalCallTree } from 'remix-solidity';
 import * as path from 'path';
 import * as fs from 'fs';
 
-//import * as ganache from 'ganache-core';
-//import * as Web3 from 'web3';
 import { CompilationResult } from './solidityCompiler';
 import { SolidityBreakpointManager } from './solidityBreakpointManager';
-
+import { SolidityStepManager } from './solidityStepManager';
 /**
  * This interface describes the mock-debug specific launch attributes
  * (which are not part of the Debug Adapter Protocol).
@@ -65,6 +63,8 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 	private _variableHandles = new Handles<string>();
 
+	private _stopOnEntry?: boolean;
+
 	private _eventManager: EventManager;
 	public get event() {
 		return this._eventManager;
@@ -91,11 +91,18 @@ export class SolidityDebugSession extends LoggingDebugSession {
 	}
 
 	private _breakpointManager: SolidityBreakpointManager;
-	//private _breakpointManager: code.BreakpointManager;
+	public get breakpointManager() {
+		return this._breakpointManager;
+	}
 
-	private _currentStepIndex: number;
-	public get currentStepIndex() {
-		return this._currentStepIndex;
+	private _stepManager: SolidityStepManager;
+	public get stepManager() {
+		return this._stepManager;
+	}
+
+	private _sourceFile : string;
+	public get sourceFile() {
+		return this._sourceFile;
 	}
 
 	private _sourceMappingDecoder: SourceMappingDecoder;
@@ -103,10 +110,6 @@ export class SolidityDebugSession extends LoggingDebugSession {
 	private _lineBreakPositionsByContent: any = [];
 
 	private _compilationResult: CompilationResult;
-
-	// This is the next line that will be 'executed'
-	private _currentLine = 0;
-
 
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
@@ -121,36 +124,7 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 		this._runtime = new SolidityRuntime();
 
-		// setup event handlers
-		this._runtime.on('stopOnEntry', () => {
-			this.sendEvent(new StoppedEvent('entry', SolidityDebugSession.THREAD_ID));
-		});
-		this._runtime.on('stopOnStep', () => {
-			this.sendEvent(new StoppedEvent('step', SolidityDebugSession.THREAD_ID));
-		});
-		this._runtime.on('stopOnBreakpoint', () => {
-			this.sendEvent(new StoppedEvent('breakpoint', SolidityDebugSession.THREAD_ID));
-		});
-		this._runtime.on('stopOnException', () => {
-			this.sendEvent(new StoppedEvent('exception', SolidityDebugSession.THREAD_ID));
-		});
-		this._runtime.on('breakpointValidated', (bp: SolidityBreakpoint) => {
-			this.sendEvent(new BreakpointEvent('changed', <DebugProtocol.Breakpoint>{ verified: bp.verified, id: bp.id }));
-		});
-		this._runtime.on('output', (text, filePath, line, column) => {
-			const e: DebugProtocol.OutputEvent = new OutputEvent(`${text}\n`);
-			e.body.source = this.createSource(filePath);
-			e.body.line = this.convertDebuggerLineToClient(line);
-			e.body.column = this.convertDebuggerColumnToClient(column);
-			this.sendEvent(e);
-		});
-		this._runtime.on('end', () => {
-			this.sendEvent(new TerminatedEvent());
-		});
-
 		this._eventManager = new EventManager();
-
-		this._currentStepIndex = -1;
 
 		this._traceManager = new trace.TraceManager();
 		this._codeManager = new code.CodeManager(this._traceManager);
@@ -159,57 +133,44 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
 
 		this._sourceMappingDecoder = new SourceMappingDecoder();
-/*
-		this._breakpointManager = new code.BreakpointManager(this, (sourceLocation) => {
-			return this.offsetToLineColumn(sourceLocation, sourceLocation.file, this._compilationResult)
+
+		this._breakpointManager = new SolidityBreakpointManager(this);
+		this._stepManager = new SolidityStepManager(this);
+
+		this._codeManager.event.register('changed', this, (code, address, instIndex) => {
+			this._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._stepManager.currentStepIndex, this.solidityProxy.contracts, (error, sourceLocation) => {
+				if (!error) {
+					this.event.trigger('sourceLocationChanged', [sourceLocation])
+				}
+			})
 		})
-*/
 
-		const self = this;
-
-/*
-		this._eventManager.register('indexChanged', this, (index) => {
-			self._codeManager.resolveStep(index, this._runtime.transaction)
-		})
-*/
-
-/*
-		codeManager.event.register('changed', this, function (code, address, index) {
-			if (self.appAPI.lastCompilationResult()) {
-				this.debugger.callTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, index, self.appAPI.lastCompilationResult().data.contracts, function (error, rawLocation) {
-					if (!error) {
-						var lineColumnPos = self.appAPI.offsetToLineColumn(rawLocation, rawLocation.file)
-						self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
-					} else {
-						self.appAPI.currentSourceLocation(null)
-					}
-				})
-*/
-
-this._runtime.eventManager.register('newTraceRequested', this, (blockNumber, txHash, tx) => {
-	//this.startDebugging(blockNumber, txIndex, tx)
-
-	self.startDebugging(tx);
-});
-
-this._codeManager.event.register('changed', this, (code, address, index) => {
-	self._internalCallTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, index, self._compilationResult.data.contracts, function (error, rawLocation) {
-		if (!error) {
-			var lineColumnPos = self.offsetToLineColumn(rawLocation, rawLocation.file, self._compilationResult)
-			//self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
-		} else {
-			//self.appAPI.currentSourceLocation(null)
-		}
-	})
-
-	self._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._currentStepIndex, this._solidityProxy.contracts, (error, sourceLocation) => {
-		if (!error) {
-
-
-			self._eventManager.trigger('sourceLocationChanged', [sourceLocation])
-		}
-	})
-})
+		// setup event handlers
+		this._stepManager.on('stopOnEntry', () => {
+			this.sendEvent(new StoppedEvent('entry', SolidityDebugSession.THREAD_ID));
+		});
+		this._stepManager.on('stopOnStep', () => {
+			this.sendEvent(new StoppedEvent('step', SolidityDebugSession.THREAD_ID));
+		});
+		this._breakpointManager.on('stopOnBreakpoint', () => {
+			this.sendEvent(new StoppedEvent('breakpoint', SolidityDebugSession.THREAD_ID));
+		});
+		this._stepManager.on('stopOnException', () => {
+			this.sendEvent(new StoppedEvent('exception', SolidityDebugSession.THREAD_ID));
+		});
+		this._breakpointManager.on('breakpointValidated', (bp: SolidityBreakpoint) => {
+			this.sendEvent(new BreakpointEvent('changed', <DebugProtocol.Breakpoint>{ verified: bp.verified, id: bp.id }));
+		});
+		this._stepManager.on('output', (text, filePath, line, column) => {
+			const e: DebugProtocol.OutputEvent = new OutputEvent(`${text}\n`);
+			e.body.source = this.createSource(filePath);
+			e.body.line = this.convertDebuggerLineToClient(line);
+			e.body.column = this.convertDebuggerColumnToClient(column);
+			this.sendEvent(e);
+		});
+		this._stepManager.on('end', () => {
+			this.sendEvent(new TerminatedEvent());
+		});
 	}
 
 	private offsetToLineColumn(rawLocation, file, compilationResult) {
@@ -222,31 +183,34 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 		return this._sourceMappingDecoder.convertOffsetToLineColumn(rawLocation, this._lineBreakPositionsByContent[file])
 	}
 
-	private startDebugging(tx: any) {
+	private debugTransaction(transaction: any) : Promise<void> {
+		const debugSession = this;
 
-		const self = this;
+		return new Promise<void>((resolve, reject) => {
 
-		tx.to = helpers.trace.contractCreationToken('0');
+			transaction.to = helpers.trace.contractCreationToken('0');
 
-		this._traceManager.resolveTrace(tx, function (error, result) {
-			if (result) {
+			const self = debugSession;
+			debugSession._traceManager.resolveTrace(transaction, function (error, result) {
+				if (result) {
 
-				self.changeState(0);
-				self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
+					self._stepManager.changeState(0);
+					self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
 
-				/*
-				if (self._breakpointManager && self._breakpointManager.hasBreakpoint()) {
-					self._breakpointManager.jumpNextBreakpoint(false);
+					/*
+					if (self._breakpointManager && self._breakpointManager.hasBreakpoint()) {
+						self._breakpointManager.jumpNextBreakpoint(false);
+					}
+					*/
+					resolve();
+				} else {
+					//self.statusMessage = error ? error.message : 'Trace not loaded'
+					//yo.update(self.view, self.render())
+
+					reject(error);
 				}
-				*/
-
-			} else {
-				//self.statusMessage = error ? error.message : 'Trace not loaded'
-				//yo.update(self.view, self.render())
-			}
+			});
 		});
-
-
 	}
 
 	/**
@@ -277,6 +241,7 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 
 	protected launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments): void {
 
+		this._stopOnEntry = args.stopOnEntry;
 		this._compilationResult = args.compilationResult;
 
 		const compilerOutput = this._compilationResult.data;
@@ -303,18 +268,31 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 					break;
 				}
 			}
-
 		}
-
 
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(args.trace ? Logger.LogLevel.Verbose : Logger.LogLevel.Stop, false);
 
-		// start the program in the runtime
-		this._runtime.start(this._compilationResult, constructorArgs, !!args.stopOnEntry)
+		this._sourceFile = args.contractFilePath;
+
+		this._runtime.deploy(constructorArgs, this._compilationResult)
+			.then(transactionTrace => {
+				this.debugTransaction.bind(this);
+				return this.debugTransaction(transactionTrace.transaction);
+			})
 			.then(() => {
+
+				if (this._stopOnEntry) {
+					// we step once
+					this._stepManager.step(false, 'stopOnEntry');
+				} else {
+					// we just start to run until we hit a breakpoint or an exception
+					this._stepManager.continue();
+				}
+
 				this.sendResponse(response);
-			});
+			})
+
 
 		//if (compilationResult && compilationResult.sources && compilationResult.contracts) {
 
@@ -375,6 +353,7 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 		response.body = {
 			breakpoints: actualBreakpoints
 		};
+
 		this.sendResponse(response);
 	}
 
@@ -395,7 +374,7 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 		const maxLevels = typeof args.levels === 'number' ? args.levels : 1000;
 		const endFrame = startFrame + maxLevels;
 
-		const stk = this._runtime.stack(startFrame, endFrame);
+		const stk = this._stepManager.stack(startFrame, endFrame);
 
 		response.body = {
 			stackFrames: stk.frames.map(f => new StackFrame(f.index, f.name, this.createSource(f.file), this.convertDebuggerLineToClient(f.line))),
@@ -535,39 +514,23 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-		this._runtime.continue();
+		this._stepManager.continue();
 		this.sendResponse(response);
 	}
 
 	protected reverseContinueRequest(response: DebugProtocol.ReverseContinueResponse, args: DebugProtocol.ReverseContinueArguments) : void {
-		this._runtime.continue(true);
+		this._stepManager.continue(true);
 		this.sendResponse(response);
  	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-		this._runtime.step();
-		//this._currentStepIndex = stepIndex;
-		//this._eventManager.trigger('indexChanged', [stepIndex]);
-
-		if (!this.traceManager.isLoaded()) {
-			return
-		}
-
-		let step = this.traceManager.findStepOverForward(this._currentStepIndex);
-
-		/*
-		if (this.solidityMode) {
-			step = this.resolveToReducedTrace(step, 1)
-		}
-		*/
-
-		this.changeState(step)
+		this._stepManager.step();
 
 		this.sendResponse(response);
 	}
 
 	protected stepBackRequest(response: DebugProtocol.StepBackResponse, args: DebugProtocol.StepBackArguments): void {
-		this._runtime.step(true);
+		this._stepManager.step(true);
 		this.sendResponse(response);
 	}
 /*
@@ -604,15 +567,15 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 			// 'evaluate' supports to create and delete breakpoints from the 'repl':
 			const matches = /new +([0-9]+)/.exec(args.expression);
 			if (matches && matches.length === 2) {
-				const mbp = this._runtime.setBreakPoint(this._runtime.sourceFile, this.convertClientLineToDebugger(parseInt(matches[1])));
-				const bp = <DebugProtocol.Breakpoint> new Breakpoint(mbp.verified, this.convertDebuggerLineToClient(mbp.line), undefined, this.createSource(this._runtime.sourceFile));
+				const mbp = this._breakpointManager.setBreakPoint(this._sourceFile, this.convertClientLineToDebugger(parseInt(matches[1])));
+				const bp = <DebugProtocol.Breakpoint> new Breakpoint(mbp.verified, this.convertDebuggerLineToClient(mbp.line), undefined, this.createSource(this._sourceFile));
 				bp.id= mbp.id;
 				this.sendEvent(new BreakpointEvent('new', bp));
 				reply = `breakpoint created`;
 			} else {
 				const matches = /del +([0-9]+)/.exec(args.expression);
 				if (matches && matches.length === 2) {
-					const mbp = this._runtime.clearBreakPoint(this._runtime.sourceFile, this.convertClientLineToDebugger(parseInt(matches[1])));
+					const mbp = this._breakpointManager.clearBreakPoint(this._sourceFile, this.convertClientLineToDebugger(parseInt(matches[1])));
 					if (mbp) {
 						const bp = <DebugProtocol.Breakpoint> new Breakpoint(false);
 						bp.id= mbp.id;
@@ -630,16 +593,8 @@ this._codeManager.event.register('changed', this, (code, address, index) => {
 		this.sendResponse(response);
 	}
 
-	//---- helpers
-
 	private createSource(filePath: string): Source {
 		return new Source(basename(filePath), this.convertDebuggerPathToClient(filePath), undefined, undefined, 'solidity-adapter-data');
-	}
-
-	private changeState(step: number) {
-		this._currentStepIndex = step
-
-		this.event.trigger('stepChanged', [step])
 	}
 }
 

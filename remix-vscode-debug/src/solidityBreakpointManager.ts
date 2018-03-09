@@ -1,5 +1,6 @@
-import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
+import { SolidityDebugSession } from './solidityDebug';
+import * as fs from 'fs';
 
 export interface SolidityBreakpoint {
 	id: number;
@@ -10,33 +11,17 @@ export interface SolidityBreakpoint {
 export class SolidityBreakpointManager extends EventEmitter {
 
 	private _breakPoints = new Map<string, SolidityBreakpoint[]>();
+	private _sourceLines = new Map<string, string[]>();
 
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
 	private _breakpointId = 1;
 
-	// the initial (and one and only) file we are 'debugging'
-	private _sourceFile: string;
-	public get sourceFile() {
-		return this._sourceFile;
-	}
+	private _debugSession: SolidityDebugSession;
 
-	// the contents (= lines) of the one and only file
-	private _sourceLines: string[];
-
-	constructor() {
+	constructor(debugSession: SolidityDebugSession) {
 		super();
-	}
-
-	public getSourceLinesLength() {
-		if (this._sourceLines)
-			return this._sourceLines.length;
-		else
-			return 0;
-	}
-
-	public getSourceLine(line: number) : string {
-		return this._sourceLines[line];
+		this._debugSession = debugSession;
 	}
 
 	/*
@@ -80,17 +65,10 @@ export class SolidityBreakpointManager extends EventEmitter {
 		this._breakPoints.delete(path);
 	}
 
-	public loadSource(file: string) : void {
-		if (this._sourceFile !== file) {
-			this._sourceFile = file;
-			this._sourceLines = readFileSync(this._sourceFile).toString().split('\n');
-		}
-	}
-
-	public hasBreakpointAtLine(line: number) : boolean {
+	public hasBreakpointAtLine(path: string, line: number) : boolean {
 
 		// is there a breakpoint?
-		const breakpoints = this._breakPoints.get(this._sourceFile);
+		const breakpoints = this._breakPoints.get(path);
 		if (breakpoints) {
 			const bps = breakpoints.filter(bp => bp.line === line);
 			if (bps.length > 0) {
@@ -114,10 +92,14 @@ export class SolidityBreakpointManager extends EventEmitter {
 	private verifyBreakpoints(path: string) : void {
 		let bps = this._breakPoints.get(path);
 		if (bps) {
-			this.loadSource(path);
+
+			//this._debugSession.loadSource(path);
+
 			bps.forEach(bp => {
-				if (!bp.verified && bp.line < this._sourceLines.length) {
-					const srcLine = this._sourceLines[bp.line].trim();
+				const sourceLines = this.getSourceLines(path);
+
+				if (!bp.verified && bp.line < sourceLines.length) {
+					const srcLine = sourceLines[bp.line].trim();
 
 					// if a line is empty or starts with '+' we don't allow to set a breakpoint but move the breakpoint down
 					if (srcLine.length === 0 || srcLine.indexOf('+') === 0) {
@@ -136,6 +118,25 @@ export class SolidityBreakpointManager extends EventEmitter {
 				}
 			});
 		}
+	}
+
+	public getSourceLine(path: string, line: number) : string {
+		return this.getSourceLines(path)[line];
+	}
+
+	public getSourceLinesLength(path: string) : number {
+		const length = this.getSourceLines(path).length;
+
+		return length;
+	}
+
+	private getSourceLines(path: string): string[] {
+		let sourceLines = this._sourceLines.get(path);
+		if (sourceLines === undefined) {
+			sourceLines = fs.readFileSync(path).toString().split('\n');
+		}
+
+		return sourceLines;
 	}
 
 	private sendEvent(event: string, ... args: any[]) {

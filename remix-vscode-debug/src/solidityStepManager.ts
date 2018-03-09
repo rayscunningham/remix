@@ -1,6 +1,5 @@
 import { EventEmitter } from 'events';
-import { trace } from 'remix-core';
-import { SolidityBreakpointManager } from './solidityBreakpointManager';
+import { SolidityDebugSession } from './solidityDebug';
 
 export class SolidityStepManager extends EventEmitter {
 
@@ -9,22 +8,13 @@ export class SolidityStepManager extends EventEmitter {
 		return this._currentStepIndex;
 	}
 
-	private _currentLine: number = -1;
-	public get currentLine() {
-		return this._currentLine;
-	}
+	private _currentLines = new Map<string, number>();
 
-	private _breakpointManager: SolidityBreakpointManager;
+	private _debugSession: SolidityDebugSession;
 
-	private _traceManager: trace.TraceManager;
-	public get traceManager() {
-		return this._traceManager;
-	}
-
-	constructor(breakpointManager: SolidityBreakpointManager, traceManager: trace.TraceManager) {
+	constructor(debugSession: SolidityDebugSession) {
 		super();
-		this._breakpointManager = breakpointManager;
-		this._traceManager = traceManager;
+		this._debugSession = debugSession;
 	}
 
 	/**
@@ -41,52 +31,68 @@ export class SolidityStepManager extends EventEmitter {
 		this.run(reverse, event);
 	}
 
-		/**
+	/**
 	 * Run through the file.
 	 * If stepEvent is specified only run a single step and emit the stepEvent.
 	 */
 	private run(reverse = false, stepEvent?: string) {
+
+		let currentLine = this.getCurrentLine(this._debugSession.sourceFile);
+
 		if (reverse) {
-			for (let ln = this._currentLine-1; ln >= 0; ln--) {
+			const step = this._debugSession.traceManager.findStepOverBack(this.currentStepIndex)
+			this.changeState(step);
+
+			for (let ln = currentLine-1; ln >= 0; ln--) {
 				if (this.fireEventsForLine(ln, stepEvent)) {
-					this._currentLine = ln;
+					this._currentLines.set(this._debugSession.sourceFile, ln);
 					return;
 				}
 			}
 			// no more lines: stop at first line
-			this._currentLine = 0;
+			this._currentLines.set(this._debugSession.sourceFile, 0);
 			this.sendEvent('stopOnEntry');
 		} else {
-			for (let ln = this._currentLine+1; ln < this._breakpointManager.getSourceLinesLength(); ln++) {
+			const step = this._debugSession.traceManager.findStepOverForward(this.currentStepIndex);
+			this.changeState(step);
 
-				//this._codeManager.resolveStep(index, this._transaction);
+			for (let ln = currentLine+1; ln < this._debugSession.breakpointManager.getSourceLinesLength(this._debugSession.sourceFile); ln++) {
+
 
 				if (this.fireEventsForLine(ln, stepEvent)) {
-					this._currentLine = ln;
+					this._currentLines.set(this._debugSession.sourceFile, ln);
 					return true;
 				}
 			}
+
 			// no more lines: run to end
 			this.emit('end');
 		}
 	}
 
-		/**
+	/**
 	 * Fire events if line has a breakpoint or the word 'exception' is found.
 	 * Returns true is execution needs to stop.
 	 */
 	private fireEventsForLine(ln: number, stepEvent?: string): boolean {
 
-		const line = this._breakpointManager.getSourceLine(ln).trim();
+		const line = this._debugSession.breakpointManager.getSourceLine(this._debugSession.sourceFile, ln).trim();
 
 		if (line.startsWith('pragma')) {
+			return false;
+		}
+
+		if (line.startsWith('//') ||
+				line.startsWith('/*') ||
+				line.startsWith('*') ||
+				line.startsWith('*/')) {
 			return false;
 		}
 
 		// if 'log(...)' found in source -> send argument to debug console
 		const matches = /log\((.*)\)/.exec(line);
 		if (matches && matches.length === 2) {
-			this.sendEvent('output', matches[1], this._breakpointManager.sourceFile, ln, matches.index)
+			this.sendEvent('output', matches[1], this._debugSession.sourceFile, ln, matches.index)
 		}
 
 		// if word 'exception' found in source -> throw exception
@@ -95,8 +101,9 @@ export class SolidityStepManager extends EventEmitter {
 			return true;
 		}
 
-		if (this._breakpointManager.hasBreakpointAtLine(ln))
+		if (this._debugSession.breakpointManager.hasBreakpointAtLine(this._debugSession.sourceFile, ln)) {
 			return true;
+		}
 
 		// non-empty line
 		if (stepEvent && line.length > 0) {
@@ -108,16 +115,53 @@ export class SolidityStepManager extends EventEmitter {
 		return false;
 	}
 
+	private getCurrentLine(path: string) : number {
+		let currentLine = this._currentLines.get(path);
+
+		if (currentLine === undefined) {
+			currentLine = 0;
+			this._currentLines.set(path, currentLine);
+		}
+
+		return currentLine;
+	}
+
+		/**
+	 * Returns a fake 'stacktrace' where every 'stackframe' is a word from the current line.
+	 */
+	public stack(startFrame: number, endFrame: number): any {
+		const sourceFile = this._debugSession.sourceFile;
+		const currentLine = this.getCurrentLine(sourceFile);
+
+		const words = this._debugSession.breakpointManager.getSourceLine(sourceFile, currentLine).trim().split(/\s+/);
+
+		const frames = new Array<any>();
+		// every word of the current line becomes a stack frame.
+		for (let i = startFrame; i < Math.min(endFrame, words.length); i++) {
+			const name = words[i];	// use a word of the line as the stackframe name
+			frames.push({
+				index: i,
+				name: `${name}(${i})`,
+				file: sourceFile,
+				line: currentLine
+			});
+		}
+		return {
+			frames: frames,
+			count: words.length
+		};
+	}
+
+	public changeState(step) {
+		this._currentStepIndex = step
+		this._debugSession.codeManager.resolveStep(step, this._debugSession.traceManager.tx);
+
+		this.emit('stepChanged', [step])
+	}
 
 	private sendEvent(event: string, ... args: any[]) {
 		setImmediate(_ => {
 			this.emit(event, ...args);
 		});
 	}
-
-	private changeState(step) {
-		this._currentStepIndex = step
-		this.emit('stepChanged', [step])
-	}
-
 }
