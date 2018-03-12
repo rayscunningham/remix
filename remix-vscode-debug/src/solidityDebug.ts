@@ -6,7 +6,7 @@ import {
 	Logger, logger,
 	DebugSession, LoggingDebugSession,
 	InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
-	Thread, StackFrame, Scope, Source, Handles, Breakpoint
+	Thread, Scope, Source, Handles, Breakpoint
 } from 'vscode-debugadapter';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
@@ -47,11 +47,32 @@ interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	trace?: boolean;
 }
 
-export interface SolidityBreakpoint {
+class StackFrame implements DebugProtocol.StackFrame {
+
+	/** An identifier for the stack frame. It must be unique across all threads. This id can be used to retrieve the scopes of the frame with the 'scopesRequest' or to restart the execution of a stackframe. */
 	id: number;
-	file: string;
+	/** The name of the stack frame, typically a method name. */
+	name: string;
+	/** The optional source of the frame. */
+	source: Source;
+	/** The line within the file of the frame. If source is null or doesn't exist, line is 0 and must be ignored. */
 	line: number;
-	verified: boolean;
+	/** The column within the line. If source is null or doesn't exist, column is 0 and must be ignored. */
+	column: number;
+	/** An optional end line of the range covered by the stack frame. */
+	endLine: number;
+	/** An optional end column of the range covered by the stack frame. */
+	endColumn: number;
+
+	constructor(id: number, name: string, source: Source, line: number, column: number, endLine: number, endColumn: number) {
+		this.id = id;
+		this.name = name;
+		this.source = source;
+		this.line = line;
+		this.column = column;
+		this.endLine = endLine;
+		this.endColumn = endColumn;
+	}
 }
 
 export class SolidityDebugSession extends LoggingDebugSession {
@@ -105,11 +126,21 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		return this._sourceFile;
 	}
 
-	private _sourceMappingDecoder: SourceMappingDecoder;
-
-	private _lineBreakPositionsByContent: any = [];
 
 	private _compilationResult: CompilationResult;
+	public get compilationResult() {
+		return this._compilationResult;
+	}
+
+	private _lineColumnPos: any;
+	public get lineColumnPos() {
+		return this._lineColumnPos;
+	}
+
+	private _sourceLocation: any;
+	public get sourceLocation() {
+		return this._sourceLocation;
+	}
 
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
@@ -132,18 +163,9 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 		this._internalCallTree = new InternalCallTree(this._eventManager, this._traceManager, this._solidityProxy, this._codeManager, { includeLocalVariables: true })
 
-		this._sourceMappingDecoder = new SourceMappingDecoder();
-
 		this._breakpointManager = new SolidityBreakpointManager(this);
 		this._stepManager = new SolidityStepManager(this);
 
-		this._codeManager.event.register('changed', this, (code, address, instIndex) => {
-			this._internalCallTree.sourceLocationTracker.getSourceLocationFromVMTraceIndex(address, this._stepManager.currentStepIndex, this.solidityProxy.contracts, (error, sourceLocation) => {
-				if (!error) {
-					this.event.trigger('sourceLocationChanged', [sourceLocation])
-				}
-			})
-		})
 
 		// setup event handlers
 		this._stepManager.on('stopOnEntry', () => {
@@ -173,16 +195,6 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		});
 	}
 
-	private offsetToLineColumn(rawLocation, file, compilationResult) {
-
-		if (!this._lineBreakPositionsByContent[file]) {
-			let filename = Object.keys(compilationResult.data.sources)[file]
-			this._lineBreakPositionsByContent[file] = this._sourceMappingDecoder.getLinebreakPositions(compilationResult.source.sources[filename].content)
-		}
-
-		return this._sourceMappingDecoder.convertOffsetToLineColumn(rawLocation, this._lineBreakPositionsByContent[file])
-	}
-
 	private debugTransaction(transaction: any) : Promise<void> {
 		const debugSession = this;
 
@@ -191,10 +203,10 @@ export class SolidityDebugSession extends LoggingDebugSession {
 			transaction.to = helpers.trace.contractCreationToken('0');
 
 			const self = debugSession;
+
 			debugSession._traceManager.resolveTrace(transaction, function (error, result) {
 				if (result) {
 
-					self._stepManager.changeState(0);
 					self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
 
 					/*
@@ -284,49 +296,15 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 				if (this._stopOnEntry) {
 					// we step once
-					this._stepManager.step(false, 'stopOnEntry');
+					this._stepManager.changeState(0);
+					this._stepManager.stepOverForward('stopOnEntry');
 				} else {
 					// we just start to run until we hit a breakpoint or an exception
 					this._stepManager.continue();
 				}
 
 				this.sendResponse(response);
-			})
-
-
-		//if (compilationResult && compilationResult.sources && compilationResult.contracts) {
-
-
-		const contractCode = fs.readFileSync(contractFilePath, 'utf8');
-
-		let nodes = this._sourceMappingDecoder.nodesAtPosition(null, 0, compilerOutput.sources[contractFilePath])
-
-		var position = this._sourceMappingDecoder.decode(nodes[0].src);
-
-		//var lineColumn = offsetToLineColumnConverter.offsetToLineColumn(position, position.file, compiler.lastCompilationResult)
-		let lineBreakPositionsByContent = {};
-
-			if (!lineBreakPositionsByContent[position.file]) {
-				var filename = Object.keys(compilerOutput.sources)[position.file]
-				lineBreakPositionsByContent[position.file] = this._sourceMappingDecoder.getLinebreakPositions(contractCode)
-			}
-			let lineColumn = this._sourceMappingDecoder.convertOffsetToLineColumn(position, lineBreakPositionsByContent[position.file])
-
-
-/*
-		this._traceManager.getCurrentCalledAddressAt(1, (error, result) => {
-			if (error)
-				console.log(error);
-			else
-			  console.log(result);
-		});
-		*/
-		//} else {
-		//	this.solidityProxy.reset({})
-		//}
-
-
-		//this.sendResponse(response);
+			});
 	}
 
   /**
@@ -377,7 +355,13 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		const stk = this._stepManager.stack(startFrame, endFrame);
 
 		response.body = {
-			stackFrames: stk.frames.map(f => new StackFrame(f.index, f.name, this.createSource(f.file), this.convertDebuggerLineToClient(f.line))),
+			stackFrames: stk.frames.map(f =>
+				new StackFrame(f.index, f.name, this.createSource(f.file),
+						this.convertDebuggerLineToClient(f.line),
+						this.convertDebuggerColumnToClient(f.column),
+						this.convertDebuggerLineToClient(f.endLine),
+						this.convertDebuggerColumnToClient(f.endColumn)
+					)),
 			totalFrames: stk.count
 		};
 
@@ -388,10 +372,14 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 		const frameReference = args.frameId;
 		const scopes = new Array<Scope>();
-		scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
+		//scopes.push(new Scope("Local", this._variableHandles.create("local_" + frameReference), false));
 		//scopes.push(new Scope("Global", this._variableHandles.create("global_" + frameReference), true));
-
 		scopes.push(new Scope("Transaction", this._variableHandles.create("tx_" + frameReference), true));
+
+		scopes.push(new Scope("Solidity Locals", this._variableHandles.create("local_" + frameReference), true));
+		scopes.push(new Scope("Solidity State", this._variableHandles.create("st_" + frameReference), true));
+		scopes.push(new Scope("Step Detail", this._variableHandles.create("step_" + frameReference), true));
+		scopes.push(new Scope("Stack", this._variableHandles.create("stack_" + frameReference), true));
 
 		response.body = {
 			scopes: scopes
@@ -404,7 +392,13 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 		const variables = new Array<DebugProtocol.Variable>();
 		const id = this._variableHandles.get(args.variablesReference);
+
 		if (id !== null) {
+
+			this._traceManager.getCurrentCalledAddressAt(this._stepManager.currentStepIndex, function (error, address) {
+
+			});
+
 /*
 			if (id.startsWith("tx_")) {
 
@@ -507,9 +501,12 @@ export class SolidityDebugSession extends LoggingDebugSession {
 			*/
 		}
 
+
+
 		response.body = {
 			variables: variables
 		};
+
 		this.sendResponse(response);
 	}
 
@@ -524,7 +521,7 @@ export class SolidityDebugSession extends LoggingDebugSession {
  	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-		this._stepManager.step();
+		this._stepManager.stepOverForward('stopOnStep');
 
 		this.sendResponse(response);
 	}
@@ -544,20 +541,6 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 */
-
-	private resolveToReducedTrace(value, incr) {
-		if (this._internalCallTree.reducedTrace.length) {
-			var nextSource = util.findClosestIndex(value, this._internalCallTree.reducedTrace)
-			nextSource = nextSource + incr
-			if (nextSource <= 0) {
-				nextSource = 0
-			} else if (nextSource > this._internalCallTree.reducedTrace.length) {
-				nextSource = this._internalCallTree.reducedTrace.length - 1
-			}
-			return this._internalCallTree.reducedTrace[nextSource]
-		}
-		return value
-	}
 
 	protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): void {
 

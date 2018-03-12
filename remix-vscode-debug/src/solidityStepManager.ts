@@ -1,5 +1,7 @@
 import { EventEmitter } from 'events';
+import * as path from 'path';
 import { SolidityDebugSession } from './solidityDebug';
+import { SourceMappingDecoder, util } from 'remix-lib';
 
 export class SolidityStepManager extends EventEmitter {
 
@@ -10,12 +12,106 @@ export class SolidityStepManager extends EventEmitter {
 
 	private _currentLines = new Map<string, number>();
 
+	private _lineColumnPos: any;
+	public get lineColumnPos() {
+		return this._lineColumnPos;
+	}
+
+	private _sourceLocation: any;
+	public get sourceLocation() {
+		return this._sourceLocation;
+	}
+
+	private _sourceMappingDecoder: SourceMappingDecoder;
+
+	private _lineBreakPositionsByContent: any = [];
+
+	private _callstack: any;
+	public get callstack() {
+		return this._callstack;
+	}
+
 	private _debugSession: SolidityDebugSession;
 
 	constructor(debugSession: SolidityDebugSession) {
 		super();
 		this._debugSession = debugSession;
+
+		this._sourceMappingDecoder = new SourceMappingDecoder();
+
+		const self = this;
+
+		this._debugSession.codeManager.event.register('changed', this, (code, address, instIndex) => {
+
+			if (self._debugSession.compilationResult) {
+				self._debugSession.callTree.sourceLocationTracker.getSourceLocationFromInstructionIndex(address, instIndex, self._debugSession.compilationResult.data.contracts, function (error, rawLocation) {
+					if (!error) {
+						self._lineColumnPos = self.offsetToLineColumn(rawLocation);
+						self._sourceLocation = rawLocation;
+						//self.appAPI.currentSourceLocation(lineColumnPos, rawLocation)
+					} else {
+						//self.appAPI.currentSourceLocation(null)
+					}
+				})
+			}
+		})
+
+		this._debugSession.callTree.event.register('callTreeReady', () => {
+
+			if (this._debugSession.callTree.functionCallStack.length) {
+				this.jumpTo(this._debugSession.callTree.functionCallStack[0])
+			}
+		})
+
 	}
+
+	private offsetToLineColumn(rawLocation) {
+
+		if (!this._lineBreakPositionsByContent[this._debugSession.sourceFile]) {
+			//let filename = Object.keys(this._debugSession.compilationResult.data.sources)[this._debugSession.sourceFile]
+			this._lineBreakPositionsByContent[this._debugSession.sourceFile] = this._sourceMappingDecoder.getLinebreakPositions(this._debugSession.compilationResult.source.sources[this._debugSession.sourceFile].content)
+		}
+
+		return this._sourceMappingDecoder.convertOffsetToLineColumn(rawLocation, this._lineBreakPositionsByContent[this._debugSession.sourceFile])
+	}
+
+	public jumpTo(step) {
+		if (!this._debugSession.traceManager.inRange(step)) {
+			return
+		}
+
+		this.changeState(step);
+	}
+
+	public stepOverForward(stepEvent?: string) {
+		if (!this._debugSession.traceManager.isLoaded()) {
+			return
+		}
+		let step = this._debugSession.traceManager.findStepOverForward(this.currentStepIndex);
+
+		step = this.resolveToReducedTrace(step, 1);
+
+		this.changeState(step);
+
+		if (stepEvent)
+			this.sendEvent(stepEvent);
+	}
+
+	public resolveToReducedTrace(value, incr) {
+		if (this._debugSession.callTree.reducedTrace.length) {
+			let nextSource = util.findClosestIndex(value, this._debugSession.callTree.reducedTrace);
+			nextSource = nextSource + incr;
+			if (nextSource <= 0) {
+				nextSource = 0;
+			} else if (nextSource > this._debugSession.callTree.reducedTrace.length) {
+				nextSource = this._debugSession.callTree.reducedTrace.length - 1;
+			}
+			return this._debugSession.callTree.reducedTrace[nextSource];
+		}
+		return value;
+	}
+
+
 
 	/**
 	 * Continue execution to the end/beginning.
@@ -30,6 +126,7 @@ export class SolidityStepManager extends EventEmitter {
 	public step(reverse = false, event = 'stopOnStep') {
 		this.run(reverse, event);
 	}
+
 
 	/**
 	 * Run through the file.
@@ -56,14 +153,17 @@ export class SolidityStepManager extends EventEmitter {
 			const step = this._debugSession.traceManager.findStepOverForward(this.currentStepIndex);
 			this.changeState(step);
 
-			for (let ln = currentLine+1; ln < this._debugSession.breakpointManager.getSourceLinesLength(this._debugSession.sourceFile); ln++) {
+			const start = this._lineColumnPos.start;
+			const end = this._lineColumnPos.end;
 
+			for (let ln = start.line+1; ln < this._debugSession.breakpointManager.getSourceLinesLength(this._debugSession.sourceFile); ln++) {
 
 				if (this.fireEventsForLine(ln, stepEvent)) {
 					this._currentLines.set(this._debugSession.sourceFile, ln);
 					return true;
 				}
 			}
+
 
 			// no more lines: run to end
 			this.emit('end');
@@ -130,9 +230,25 @@ export class SolidityStepManager extends EventEmitter {
 	 * Returns a fake 'stacktrace' where every 'stackframe' is a word from the current line.
 	 */
 	public stack(startFrame: number, endFrame: number): any {
-		const sourceFile = this._debugSession.sourceFile;
-		const currentLine = this.getCurrentLine(sourceFile);
 
+		const contract = path.basename(this._debugSession.sourceFile);
+		const frames = new Array<any>();
+		frames.push({
+			index: this._currentStepIndex,
+			name: 'constructor',
+			file: this._debugSession.sourceFile,
+			line: this._lineColumnPos.start.line,
+			column: this._lineColumnPos.start.column,
+			endLine: this._lineColumnPos.end.line,
+			endColumn: this._lineColumnPos.end.column
+		});
+
+		return {
+			frames: frames,
+			count: frames.length
+		};
+
+		/*
 		const words = this._debugSession.breakpointManager.getSourceLine(sourceFile, currentLine).trim().split(/\s+/);
 
 		const frames = new Array<any>();
@@ -145,16 +261,35 @@ export class SolidityStepManager extends EventEmitter {
 				file: sourceFile,
 				line: currentLine
 			});
-		}
+		};
+
 		return {
 			frames: frames,
 			count: words.length
 		};
+		*/
 	}
 
 	public changeState(step) {
+
+		const self = this;
 		this._currentStepIndex = step
+
 		this._debugSession.codeManager.resolveStep(step, this._debugSession.traceManager.tx);
+
+		this._debugSession.traceManager.getCallStackAt(step, function (error, callstack) {
+      if (error) {
+        console.log(error)
+
+   //   } else if (self.parent.currentStepIndex === index) {
+			} else {
+				self._callstack = callstack;
+      }
+		});
+
+		this._debugSession.traceManager.buildCallPath(step, (error, callsPath) => {
+			console.log(callsPath);
+		});
 
 		this.emit('stepChanged', [step])
 	}
