@@ -85,6 +85,9 @@ export class SolidityDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<string>();
 
 	private _stopOnEntry?: boolean;
+	public get stopOnEntry() {
+		return this._stopOnEntry;
+	}
 
 	private _eventManager: EventManager;
 	public get event() {
@@ -126,20 +129,9 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		return this._sourceFile;
 	}
 
-
 	private _compilationResult: CompilationResult;
 	public get compilationResult() {
 		return this._compilationResult;
-	}
-
-	private _lineColumnPos: any;
-	public get lineColumnPos() {
-		return this._lineColumnPos;
-	}
-
-	private _sourceLocation: any;
-	public get sourceLocation() {
-		return this._sourceLocation;
 	}
 
 	/**
@@ -214,6 +206,7 @@ export class SolidityDebugSession extends LoggingDebugSession {
 						self._breakpointManager.jumpNextBreakpoint(false);
 					}
 					*/
+
 					resolve();
 				} else {
 					//self.statusMessage = error ? error.message : 'Trace not loaded'
@@ -293,15 +286,16 @@ export class SolidityDebugSession extends LoggingDebugSession {
 				return this.debugTransaction(transactionTrace.transaction);
 			})
 			.then(() => {
-
+				/*
 				if (this._stopOnEntry) {
 					// we step once
-					this._stepManager.changeState(0);
 					this._stepManager.stepOverForward('stopOnEntry');
 				} else {
 					// we just start to run until we hit a breakpoint or an exception
 					this._stepManager.continue();
 				}
+				*/
+
 
 				this.sendResponse(response);
 			});

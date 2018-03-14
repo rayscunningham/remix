@@ -10,8 +10,6 @@ export class SolidityStepManager extends EventEmitter {
 		return this._currentStepIndex;
 	}
 
-	private _currentLines = new Map<string, number>();
-
 	private _lineColumnPos: any;
 	public get lineColumnPos() {
 		return this._lineColumnPos;
@@ -21,6 +19,8 @@ export class SolidityStepManager extends EventEmitter {
 	public get sourceLocation() {
 		return this._sourceLocation;
 	}
+
+	private _currentLines = new Map<string, number>();
 
 	private _sourceMappingDecoder: SourceMappingDecoder;
 
@@ -40,6 +40,17 @@ export class SolidityStepManager extends EventEmitter {
 		this._sourceMappingDecoder = new SourceMappingDecoder();
 
 		const self = this;
+
+		this._debugSession.event.register('newTraceLoaded', this, function () {
+			self._debugSession.traceManager.getLength(function (error, length) {
+				if (error) {
+					console.log(error)
+				} else {
+					//self.slider.init(length)
+					self.init()
+				}
+			})
+		})
 
 		this._debugSession.codeManager.event.register('changed', this, (code, address, instIndex) => {
 
@@ -65,6 +76,16 @@ export class SolidityStepManager extends EventEmitter {
 
 	}
 
+	private init() {
+
+		this.changeState(0);
+
+		if (this._debugSession.stopOnEntry)
+			this.sendEvent('stopOnEntry');
+		else
+			this.continue();
+	}
+
 	private offsetToLineColumn(rawLocation) {
 
 		if (!this._lineBreakPositionsByContent[this._debugSession.sourceFile]) {
@@ -83,19 +104,30 @@ export class SolidityStepManager extends EventEmitter {
 		this.changeState(step);
 	}
 
+	public jumpToNextBreakpoint() {
+
+		let step = this._debugSession.traceManager.findStepOverForward(this.currentStepIndex);
+
+		step = this.resolveToReducedTrace(step, 1);
+
+		//this._debugSession.breakpointManager.hasBreakpointAtLine();
+	}
+
 	public stepOverForward(stepEvent?: string) {
 		if (!this._debugSession.traceManager.isLoaded()) {
 			return
 		}
+
 		let step = this._debugSession.traceManager.findStepOverForward(this.currentStepIndex);
 
 		step = this.resolveToReducedTrace(step, 1);
 
 		this.changeState(step);
 
-		if (stepEvent)
-			this.sendEvent(stepEvent);
+		this.sendEvent('stopOnStep');
 	}
+
+
 
 	public resolveToReducedTrace(value, incr) {
 		if (this._debugSession.callTree.reducedTrace.length) {
