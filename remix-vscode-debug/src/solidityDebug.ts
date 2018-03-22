@@ -10,15 +10,15 @@ import {
 } from 'vscode-debugadapter';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { basename } from 'path';
-import { SolidityRuntime, SolidityBreakpoint, TransactionTrace } from './solidityRuntime';
+import { SolidityRuntime, SolidityBreakpoint } from './solidityRuntime';
 
-import { SourceMappingDecoder, EventManager, helpers, util, global } from 'remix-lib';;
+import { EventManager, helpers } from 'remix-lib';;
 
 import { trace, code } from 'remix-core';
 import { SolidityProxy, InternalCallTree } from 'remix-solidity';
+import * as web3Utils from 'web3-utils';
 
 import * as path from 'path';
-import * as fs from 'fs';
 
 import { CompilationResult } from './solidityCompiler';
 import { SolidityBreakpointManager } from './solidityBreakpointManager';
@@ -166,7 +166,7 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		this._stepManager.on('stopOnStep', () => {
 			this.sendEvent(new StoppedEvent('step', SolidityDebugSession.THREAD_ID));
 		});
-		this._breakpointManager.on('stopOnBreakpoint', () => {
+		this._stepManager.on('stopOnBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('breakpoint', SolidityDebugSession.THREAD_ID));
 		});
 		this._stepManager.on('stopOnException', () => {
@@ -266,8 +266,29 @@ export class SolidityDebugSession extends LoggingDebugSession {
 				if (abi[i].type === 'constructor') {
 					const constructorInputs = abi[i].inputs ;
 					for (var i = 0; i < constructorInputs.length; i++) {
-						//inputTypes.push(constructorInputs[i].type)
-						constructorArgs[i] = Number(constructorArgs[i]);
+
+						switch(constructorInputs[i].type) {
+							case "bool":
+								constructorArgs[i] = Boolean(constructorArgs[i]);
+								break;
+							case "int8":
+								constructorArgs[i] = web3Utils.toBN(constructorArgs[i]);
+							case "uint8":
+								constructorArgs[i] = web3Utils.toBN(constructorArgs[i]);
+								break;
+							case "uint256":
+								constructorArgs[i] = web3Utils.toBN(constructorArgs[i]);
+								break;
+							case "address":
+								constructorArgs[i] = web3Utils.toBN(constructorArgs[i]);
+								break;
+							case "address":
+								constructorArgs[i] = web3Utils.toBN(constructorArgs[i]);
+								break;
+							default:
+								constructorArgs[i] = String(constructorArgs[i]);
+						}
+
 					}
 
 					break;
@@ -286,16 +307,6 @@ export class SolidityDebugSession extends LoggingDebugSession {
 				return this.debugTransaction(transactionTrace.transaction);
 			})
 			.then(() => {
-				/*
-				if (this._stopOnEntry) {
-					// we step once
-					this._stepManager.stepOverForward('stopOnEntry');
-				} else {
-					// we just start to run until we hit a breakpoint or an exception
-					this._stepManager.continue();
-				}
-				*/
-
 
 				this.sendResponse(response);
 			});
@@ -505,36 +516,40 @@ export class SolidityDebugSession extends LoggingDebugSession {
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-		this._stepManager.continue();
+		//this._stepManager.continue();
+		this._stepManager.jumpNextBreakpoint(true);
 		this.sendResponse(response);
 	}
 
 	protected reverseContinueRequest(response: DebugProtocol.ReverseContinueResponse, args: DebugProtocol.ReverseContinueArguments) : void {
-		this._stepManager.continue(true);
+		//this._stepManager.continue(true);
+		this._stepManager.jumpPreviousBreakpoint(true);
 		this.sendResponse(response);
  	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-		this._stepManager.stepOverForward('stopOnStep');
-
+		this._stepManager.stepOverForward();
 		this.sendResponse(response);
 	}
 
 	protected stepBackRequest(response: DebugProtocol.StepBackResponse, args: DebugProtocol.StepBackArguments): void {
-		this._stepManager.step(true);
+		//this._stepManager.step(true);
+		this._stepManager.stepOverBack();
 		this.sendResponse(response);
 	}
-/*
+
 	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
 		//this._runtime.step(true);
+		this._stepManager.stepIntoForward();
 		this.sendResponse(response);
 	}
 
 	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments): void {
 		//this._runtime.step(true);
+		this._stepManager.stepIntoBack();
 		this.sendResponse(response);
 	}
-*/
+
 
 	protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): void {
 

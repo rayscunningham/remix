@@ -74,14 +74,16 @@ export class SolidityBreakpointManager extends EventEmitter {
 			if (bps.length > 0) {
 
 				// send 'stopped' event
-				this.sendEvent('stopOnBreakpoint');
+				//this.sendEvent('stopOnBreakpoint');
 
 				// the following shows the use of 'breakpoint' events to update properties of a breakpoint in the UI
 				// if breakpoint is not yet verified, verify it now and send a 'breakpoint' update event
+			/*
 				if (!bps[0].verified) {
 					bps[0].verified = true;
 					this.sendEvent('breakpointValidated', bps[0]);
 				}
+			*/
 				return true;
 			}
 		}

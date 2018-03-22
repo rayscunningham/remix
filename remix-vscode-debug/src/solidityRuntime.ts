@@ -2,7 +2,6 @@
  * Copyright (C) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------*/
 
-import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
 
 import * as path from 'path';
@@ -10,13 +9,8 @@ import * as path from 'path';
 import * as ganache from 'ganache-core';
 import * as Web3 from 'web3';
 
-import  { EventManager, global, init }from 'remix-lib';
+import  { EventManager, execution, global, init }from 'remix-lib';
 
-import { trace, code } from 'remix-core';
-import { SolidityProxy, InternalCallTree } from 'remix-solidity';
-
-import * as EthJSVM from 'ethereumjs-vm';
-import * as StateManager from 'ethereumjs-vm/lib/stateManager';
 import { CompilationResult } from './solidityCompiler';
 
 export interface SolidityBreakpoint {
@@ -56,6 +50,15 @@ export class SolidityRuntime extends EventEmitter {
 		}));
 
 		init.extendWeb3(global.web3);
+
+		execution.executionContext.detectNetwork((error, network) => {
+			if (error || !network) {
+				global.web3Debug = global.web3
+			} else {
+				var webDebugNode = init.web3DebugNode(network.name)
+				global.web3Debug = !webDebugNode ? global.web3 : webDebugNode
+			}
+		})
 	}
 
 	public deploy(constructorArgs: any[], compilationResult: CompilationResult): Promise<TransactionTrace> {
@@ -89,9 +92,6 @@ export class SolidityRuntime extends EventEmitter {
 
 				return <TransactionTrace> {transaction: tx, transactionReceipt: txReceipt, trace: debugTrace};
 			})
-
-			//return <TransactionTrace> {};
-		//this._eventManager.trigger('newTraceRequested', [tx.blockNumber, tx.hash, tx])
 	}
 
 	public estimateGas(byteCode: string): Promise<number> {
@@ -137,13 +137,13 @@ export class SolidityRuntime extends EventEmitter {
 
 					// e.g. check tx hash on the first call (transaction send)
 					if (!result.address) {
-							//resolve(result);
+
 							console.log("Transaction Hash: " + result.transactionHash);
 					} else {
 						// check address on the second call (contract deployed)
 						resolve(result)
 						console.log("Address: " + result.address);
-							//resolve((result) => { if (result.address) return result });
+
 					}
 				}
 			})
