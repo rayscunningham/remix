@@ -84,6 +84,11 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 	private _variableHandles = new Handles<string>();
 
+	private _tx: any;
+	public get tx() {
+		return this._tx;
+	}
+
 	private _stopOnEntry?: boolean;
 	public get stopOnEntry() {
 		return this._stopOnEntry;
@@ -158,7 +163,6 @@ export class SolidityDebugSession extends LoggingDebugSession {
 		this._breakpointManager = new SolidityBreakpointManager(this);
 		this._stepManager = new SolidityStepManager(this);
 
-
 		// setup event handlers
 		this._stepManager.on('stopOnEntry', () => {
 			this.sendEvent(new StoppedEvent('entry', SolidityDebugSession.THREAD_ID));
@@ -198,7 +202,7 @@ export class SolidityDebugSession extends LoggingDebugSession {
 
 			debugSession._traceManager.resolveTrace(transaction, function (error, result) {
 				if (result) {
-
+					self._tx = transaction;
 					self._eventManager.trigger('newTraceLoaded', [self._traceManager.trace]);
 
 					/*

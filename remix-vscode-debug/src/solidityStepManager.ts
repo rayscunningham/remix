@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import { SolidityDebugSession } from './solidityDebug';
 import { SourceMappingDecoder, helpers, util } from 'remix-lib';
+import { storage } from 'remix-core';
+import { stateDecoder } from 'remix-solidity';
 
 export class SolidityStepManager extends EventEmitter {
 
@@ -22,6 +24,9 @@ export class SolidityStepManager extends EventEmitter {
 		return this._sourceLocation;
 	}
 
+	private _stateVariablesByAddresses: any = [];
+	private _storageResolver: storage.StorageResolver;
+
 	private _sourceMappingDecoder: SourceMappingDecoder;
 
 	private _lineBreakPositionsByContent: any = [];
@@ -38,6 +43,7 @@ export class SolidityStepManager extends EventEmitter {
 
 		this._debugSession = debugSession;
 		this._sourceMappingDecoder = new SourceMappingDecoder();
+		this._storageResolver = new storage.StorageResolver();
 
 		const self = this;
 
@@ -292,6 +298,7 @@ export class SolidityStepManager extends EventEmitter {
 	public changeState(step) {
 
 		const self = this;
+
 		this._currentStepIndex = step
 
 		this._debugSession.codeManager.resolveStep(step, this._debugSession.traceManager.tx);
@@ -310,6 +317,26 @@ export class SolidityStepManager extends EventEmitter {
 			console.log(callsPath);
 		});
 
+		this._debugSession.traceManager.getCurrentCalledAddressAt(step, (error, address) => {
+			if (error) {
+				console.log(error)
+			} else {
+				if (this._stateVariablesByAddresses[address]) {
+						this.extractStateVariables(self, this._stateVariablesByAddresses[address], address)
+				} else {
+					this._debugSession.solidityProxy.extractStateVariablesAt(step, (error, stateVars) => {
+						if (error) {
+							console.log(error)
+						} else {
+							this._stateVariablesByAddresses[address] = stateVars
+							this.extractStateVariables(self, stateVars, address)
+						}
+					});
+				}
+			}
+
+		});
+
 		this.emit('stepChanged', [step])
 
 		/*
@@ -317,6 +344,27 @@ export class SolidityStepManager extends EventEmitter {
 			this.emit('end');
 		*/
 	}
+
+	private extractStateVariables(self, stateVars, address) {
+		let storageViewer = new storage.StorageViewer({
+			stepIndex: this._currentStepIndex,
+			tx: this._debugSession.tx,
+			address: address
+		},
+		this._storageResolver,
+		this._debugSession.traceManager);
+
+		stateDecoder.decodeState(stateVars, storageViewer).then((result) => {
+			console.log(result);
+			//self.basicPanel.setMessage('')
+			if (!result.error) {
+				//self.basicPanel.update(result)
+			} else {
+				//self.basicPanel.setMessage(result.error)
+			}
+		})
+	}
+
 
 	private sendEvent(event: string, ... args: any[]) {
 		setImmediate(_ => {
